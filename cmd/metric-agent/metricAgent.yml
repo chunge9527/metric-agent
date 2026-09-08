@@ -1,0 +1,100 @@
+# MetricAgent 基础配置文件
+# 对应 model.AgentConfig 结构体
+# 部署时请根据实际环境修改以下配置
+
+agent:
+  # 节点唯一标识，必填，仅允许字母、数字、下划线、横线
+  id: node-001
+  # 节点分组
+  group: k8s
+  
+# 服务特性总开关，true启用，false禁用，未配置时默认全部false）
+feature:
+  # Nacos配置中心和配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
+  enableNacos: true
+  # 进程守护服务(guardianSvc)开关，关闭不启动进程守护、不加载crontab.yaml
+  enableGuardian: false
+  # 定时任务调度服务(scheduleSvc)开关，关闭不加载scheduledConfig.yaml、不运行定时任务
+  enableSchedule: false
+  
+# Nacos 配置中心连接信息
+nacos:
+  # Nacos 服务地址
+  address: http://192.168.16.177:8848
+  # 命名空间id（默认public）
+  namespace: ""    # public命名空间id就是空字符串
+  # 分组（默认DEFAULT_GROUP）
+  group: DEFAULT_GROUP
+  # 鉴权账号密码（Nacos控制台创建的账号，只读权限最佳）
+  username: user_nacos
+  password: Nacos,2026
+
+  # 可选参数
+  # 单次 Nacos http/gRPC 请求超时时间，单位（毫秒）
+  timeout: 5000
+  # 是否在启动时不加载配置缓存，默认true
+  notLoadCacheAtStart: true
+
+ 
+
+# Shell 远程命令加密配置
+shell:
+  encrypt:
+    # AES-128加密密钥（16字节），用于远程命令请求/响应加密
+    # 不建议修改默认值，会导致命令行模式无法正常工作
+    # 不要修改长度，否则JAVA侧加密会比较麻烦
+    key: "7sK9p2R5zG8tB4vN"
+
+# 配置清单拉取、二级配置分发、配置清理配置
+config:
+  pullInterval: 1  # 小于0默认为1，单位分钟
+  cleanOrphanFile:
+    # 是否开启配置对齐，默认false关闭，防止误删  
+    enable: true 
+    # 定点执行清理时间配置，2代表2点执行，可配置多个时间点，自动清理配置重复的时间点
+    # 只支持大于0小于23的正整数，不符合要求的直接过滤
+    # 必填，若无有效配置不执行配置清理逻辑        
+    cleanFixHour: [0,1,10]   
+    # 需要清理的文件后缀，排除空字符串，必填，不配置不执行配置清理逻辑，也不执行按group拉取配置
+    cleanSuffix: [".yml",".yaml"]      
+  # 配置重载脚本超时（秒）
+  reloadScript:
+    timeout: 60
+    
+# 进程守护超时配置
+crontab:
+  # 守护巡检时间间隔（分钟）
+  interval: 1
+  healthCheck:
+    # 健康检查脚本超时（秒）
+    timeout: 60
+  startScript:
+    # 启动脚本超时（秒）
+    timeout: 120
+
+# 请求透传默认超时（秒）
+forward:
+  timeout: 30
+
+# VictoriaMetrics 监控组件配置
+victoriaMetrics:
+  # VictoriaMetrics 查询地址
+  url: http://192.168.50.177:9090
+  # 鉴权请求头（如需要），支持环境变量引用
+  headers:
+    - key: Authorization
+      value: Basic dXNlc192Tp7U01TNH02b1RkV1glc1U5dysrTXg5WjZuV3dwSU16Y1cr043a2pHTjJna2d6ZGpzPQ==
+
+# HTTP 接口鉴权配置
+auth:
+  # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION
+  # 生产禁止硬编码，优先环境变量注入
+  key: "bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ="
+
+log:
+  # 日志级别：debug / info / warn / error，默认 info
+  level: info
+  # 单个日志文件最大大小，单位 MB，默认 100
+  maxFileSize: 100
+  # 日志最大保留天数，默认30天
+  maxRetainDays: 30

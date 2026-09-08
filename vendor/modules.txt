@@ -1,0 +1,345 @@
+# github.com/BurntSushi/toml v1.6.0
+## explicit; go 1.18
+# github.com/alibabacloud-go/alibabacloud-gateway-pop v0.0.6
+## explicit; go 1.14
+github.com/alibabacloud-go/alibabacloud-gateway-pop/client
+# github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5
+## explicit; go 1.14
+github.com/alibabacloud-go/alibabacloud-gateway-spi/client
+# github.com/alibabacloud-go/darabonba-array v0.1.0
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-array/client
+# github.com/alibabacloud-go/darabonba-encode-util v0.0.2
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-encode-util/client
+# github.com/alibabacloud-go/darabonba-map v0.0.2
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-map/client
+# github.com/alibabacloud-go/darabonba-openapi/v2 v2.0.10
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-openapi/v2/client
+# github.com/alibabacloud-go/darabonba-signature-util v0.0.7
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-signature-util/client
+# github.com/alibabacloud-go/darabonba-string v1.0.2
+## explicit; go 1.14
+github.com/alibabacloud-go/darabonba-string/client
+# github.com/alibabacloud-go/debug v1.0.1
+## explicit; go 1.18
+github.com/alibabacloud-go/debug/debug
+# github.com/alibabacloud-go/endpoint-util v1.1.0
+## explicit
+github.com/alibabacloud-go/endpoint-util/service
+# github.com/alibabacloud-go/kms-20160120/v3 v3.2.3
+## explicit; go 1.14
+github.com/alibabacloud-go/kms-20160120/v3/client
+# github.com/alibabacloud-go/openapi-util v0.1.0
+## explicit; go 1.14
+github.com/alibabacloud-go/openapi-util/service
+# github.com/alibabacloud-go/tea v1.2.2
+## explicit; go 1.14
+github.com/alibabacloud-go/tea/tea
+github.com/alibabacloud-go/tea/utils
+# github.com/alibabacloud-go/tea-utils v1.4.4
+## explicit; go 1.14
+github.com/alibabacloud-go/tea-utils/service
+# github.com/alibabacloud-go/tea-utils/v2 v2.0.7
+## explicit; go 1.14
+github.com/alibabacloud-go/tea-utils/v2/service
+# github.com/alibabacloud-go/tea-xml v1.1.3
+## explicit; go 1.14
+github.com/alibabacloud-go/tea-xml/service
+# github.com/aliyun/alibaba-cloud-sdk-go v1.61.1800
+## explicit; go 1.13
+github.com/aliyun/alibaba-cloud-sdk-go/sdk
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials/provider
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/signers
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/endpoints
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses
+github.com/aliyun/alibaba-cloud-sdk-go/sdk/utils
+github.com/aliyun/alibaba-cloud-sdk-go/services/kms
+# github.com/aliyun/alibabacloud-dkms-gcs-go-sdk v0.5.1
+## explicit; go 1.13
+github.com/aliyun/alibabacloud-dkms-gcs-go-sdk/openapi
+github.com/aliyun/alibabacloud-dkms-gcs-go-sdk/openapi-credential
+github.com/aliyun/alibabacloud-dkms-gcs-go-sdk/openapi-util
+github.com/aliyun/alibabacloud-dkms-gcs-go-sdk/openapi-util/protobuf/api
+github.com/aliyun/alibabacloud-dkms-gcs-go-sdk/sdk
+# github.com/aliyun/alibabacloud-dkms-transfer-go-sdk v0.1.8
+## explicit; go 1.16
+github.com/aliyun/alibabacloud-dkms-transfer-go-sdk/sdk
+# github.com/aliyun/aliyun-secretsmanager-client-go v1.1.5
+## explicit; go 1.14
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/auth
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/cache
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/logger
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/models
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/service
+github.com/aliyun/aliyun-secretsmanager-client-go/sdk/utils
+# github.com/aliyun/credentials-go v1.4.3
+## explicit; go 1.14
+github.com/aliyun/credentials-go/credentials
+github.com/aliyun/credentials-go/credentials/internal/http
+github.com/aliyun/credentials-go/credentials/internal/utils
+github.com/aliyun/credentials-go/credentials/providers
+github.com/aliyun/credentials-go/credentials/request
+github.com/aliyun/credentials-go/credentials/response
+github.com/aliyun/credentials-go/credentials/utils
+# github.com/beorn7/perks v1.0.1
+## explicit; go 1.11
+github.com/beorn7/perks/quantile
+# github.com/buger/jsonparser v1.1.1
+## explicit; go 1.13
+github.com/buger/jsonparser
+# github.com/cespare/xxhash/v2 v2.3.0
+## explicit; go 1.11
+github.com/cespare/xxhash/v2
+# github.com/clbanning/mxj/v2 v2.5.5
+## explicit; go 1.15
+github.com/clbanning/mxj/v2
+# github.com/deckarep/golang-set v1.7.1
+## explicit
+github.com/deckarep/golang-set
+# github.com/golang/mock v1.6.0
+## explicit; go 1.11
+github.com/golang/mock/gomock
+# github.com/golang/protobuf v1.5.4
+## explicit; go 1.17
+github.com/golang/protobuf/proto
+github.com/golang/protobuf/ptypes
+github.com/golang/protobuf/ptypes/any
+github.com/golang/protobuf/ptypes/duration
+github.com/golang/protobuf/ptypes/timestamp
+# github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af
+## explicit
+github.com/jmespath/go-jmespath
+# github.com/json-iterator/go v1.1.12
+## explicit; go 1.12
+github.com/json-iterator/go
+# github.com/matttproud/golang_protobuf_extensions v1.0.1
+## explicit
+github.com/matttproud/golang_protobuf_extensions/pbutil
+# github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd
+## explicit
+github.com/modern-go/concurrent
+# github.com/modern-go/reflect2 v1.0.2
+## explicit; go 1.12
+github.com/modern-go/reflect2
+# github.com/nacos-group/nacos-sdk-go/v2 v2.3.5
+## explicit; go 1.21
+github.com/nacos-group/nacos-sdk-go/v2/api/grpc
+github.com/nacos-group/nacos-sdk-go/v2/clients
+github.com/nacos-group/nacos-sdk-go/v2/clients/cache
+github.com/nacos-group/nacos-sdk-go/v2/clients/config_client
+github.com/nacos-group/nacos-sdk-go/v2/clients/nacos_client
+github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client
+github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client/naming_cache
+github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client/naming_grpc
+github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client/naming_http
+github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client/naming_proxy
+github.com/nacos-group/nacos-sdk-go/v2/common/constant
+github.com/nacos-group/nacos-sdk-go/v2/common/encoding
+github.com/nacos-group/nacos-sdk-go/v2/common/encryption
+github.com/nacos-group/nacos-sdk-go/v2/common/file
+github.com/nacos-group/nacos-sdk-go/v2/common/filter
+github.com/nacos-group/nacos-sdk-go/v2/common/http_agent
+github.com/nacos-group/nacos-sdk-go/v2/common/logger
+github.com/nacos-group/nacos-sdk-go/v2/common/monitor
+github.com/nacos-group/nacos-sdk-go/v2/common/nacos_error
+github.com/nacos-group/nacos-sdk-go/v2/common/nacos_server
+github.com/nacos-group/nacos-sdk-go/v2/common/remote/rpc
+github.com/nacos-group/nacos-sdk-go/v2/common/remote/rpc/rpc_request
+github.com/nacos-group/nacos-sdk-go/v2/common/remote/rpc/rpc_response
+github.com/nacos-group/nacos-sdk-go/v2/common/security
+github.com/nacos-group/nacos-sdk-go/v2/common/tls
+github.com/nacos-group/nacos-sdk-go/v2/inner/uuid
+github.com/nacos-group/nacos-sdk-go/v2/model
+github.com/nacos-group/nacos-sdk-go/v2/util
+github.com/nacos-group/nacos-sdk-go/v2/vo
+# github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
+## explicit
+github.com/orcaman/concurrent-map
+# github.com/pkg/errors v0.9.1
+## explicit
+github.com/pkg/errors
+# github.com/prometheus/client_golang v1.12.2
+## explicit; go 1.13
+github.com/prometheus/client_golang/prometheus
+github.com/prometheus/client_golang/prometheus/internal
+# github.com/prometheus/client_model v0.2.0
+## explicit; go 1.9
+github.com/prometheus/client_model/go
+# github.com/prometheus/common v0.32.1
+## explicit; go 1.13
+github.com/prometheus/common/expfmt
+github.com/prometheus/common/internal/bitbucket.org/ww/goautoneg
+github.com/prometheus/common/model
+# github.com/prometheus/procfs v0.7.3
+## explicit; go 1.13
+github.com/prometheus/procfs
+github.com/prometheus/procfs/internal/fs
+github.com/prometheus/procfs/internal/util
+# github.com/robfig/cron/v3 v3.0.1
+## explicit; go 1.12
+github.com/robfig/cron/v3
+# github.com/tjfoc/gmsm v1.4.1
+## explicit; go 1.14
+github.com/tjfoc/gmsm/sm3
+# go.uber.org/atomic v1.7.0
+## explicit; go 1.13
+go.uber.org/atomic
+# go.uber.org/multierr v1.6.0
+## explicit; go 1.12
+go.uber.org/multierr
+# go.uber.org/zap v1.21.0
+## explicit; go 1.13
+go.uber.org/zap
+go.uber.org/zap/buffer
+go.uber.org/zap/internal/bufferpool
+go.uber.org/zap/internal/color
+go.uber.org/zap/internal/exit
+go.uber.org/zap/zapcore
+# golang.org/x/crypto v0.31.0
+## explicit; go 1.20
+golang.org/x/crypto/pbkdf2
+golang.org/x/crypto/pkcs12
+golang.org/x/crypto/pkcs12/internal/rc2
+# golang.org/x/net v0.33.0
+## explicit; go 1.18
+golang.org/x/net/http/httpguts
+golang.org/x/net/http2
+golang.org/x/net/http2/hpack
+golang.org/x/net/idna
+golang.org/x/net/internal/socks
+golang.org/x/net/internal/timeseries
+golang.org/x/net/proxy
+golang.org/x/net/trace
+# golang.org/x/sync v0.10.0
+## explicit; go 1.18
+golang.org/x/sync/semaphore
+# golang.org/x/sys v0.28.0
+## explicit; go 1.18
+golang.org/x/sys/unix
+golang.org/x/sys/windows
+# golang.org/x/text v0.21.0
+## explicit; go 1.18
+golang.org/x/text/secure/bidirule
+golang.org/x/text/transform
+golang.org/x/text/unicode/bidi
+golang.org/x/text/unicode/norm
+# golang.org/x/time v0.1.0
+## explicit
+golang.org/x/time/rate
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142
+## explicit; go 1.21
+google.golang.org/genproto/googleapis/rpc/status
+# google.golang.org/grpc v1.67.3
+## explicit; go 1.21
+google.golang.org/grpc
+google.golang.org/grpc/attributes
+google.golang.org/grpc/backoff
+google.golang.org/grpc/balancer
+google.golang.org/grpc/balancer/base
+google.golang.org/grpc/balancer/grpclb/state
+google.golang.org/grpc/balancer/pickfirst
+google.golang.org/grpc/balancer/roundrobin
+google.golang.org/grpc/binarylog/grpc_binarylog_v1
+google.golang.org/grpc/channelz
+google.golang.org/grpc/codes
+google.golang.org/grpc/connectivity
+google.golang.org/grpc/credentials
+google.golang.org/grpc/credentials/insecure
+google.golang.org/grpc/encoding
+google.golang.org/grpc/encoding/proto
+google.golang.org/grpc/experimental/stats
+google.golang.org/grpc/grpclog
+google.golang.org/grpc/grpclog/internal
+google.golang.org/grpc/internal
+google.golang.org/grpc/internal/backoff
+google.golang.org/grpc/internal/balancer/gracefulswitch
+google.golang.org/grpc/internal/balancerload
+google.golang.org/grpc/internal/binarylog
+google.golang.org/grpc/internal/buffer
+google.golang.org/grpc/internal/channelz
+google.golang.org/grpc/internal/credentials
+google.golang.org/grpc/internal/envconfig
+google.golang.org/grpc/internal/grpclog
+google.golang.org/grpc/internal/grpcsync
+google.golang.org/grpc/internal/grpcutil
+google.golang.org/grpc/internal/idle
+google.golang.org/grpc/internal/metadata
+google.golang.org/grpc/internal/pretty
+google.golang.org/grpc/internal/resolver
+google.golang.org/grpc/internal/resolver/dns
+google.golang.org/grpc/internal/resolver/dns/internal
+google.golang.org/grpc/internal/resolver/passthrough
+google.golang.org/grpc/internal/resolver/unix
+google.golang.org/grpc/internal/serviceconfig
+google.golang.org/grpc/internal/stats
+google.golang.org/grpc/internal/status
+google.golang.org/grpc/internal/syscall
+google.golang.org/grpc/internal/transport
+google.golang.org/grpc/internal/transport/networktype
+google.golang.org/grpc/keepalive
+google.golang.org/grpc/mem
+google.golang.org/grpc/metadata
+google.golang.org/grpc/peer
+google.golang.org/grpc/resolver
+google.golang.org/grpc/resolver/dns
+google.golang.org/grpc/serviceconfig
+google.golang.org/grpc/stats
+google.golang.org/grpc/status
+google.golang.org/grpc/tap
+# google.golang.org/protobuf v1.36.5
+## explicit; go 1.21
+google.golang.org/protobuf/encoding/protojson
+google.golang.org/protobuf/encoding/prototext
+google.golang.org/protobuf/encoding/protowire
+google.golang.org/protobuf/internal/descfmt
+google.golang.org/protobuf/internal/descopts
+google.golang.org/protobuf/internal/detrand
+google.golang.org/protobuf/internal/editiondefaults
+google.golang.org/protobuf/internal/editionssupport
+google.golang.org/protobuf/internal/encoding/defval
+google.golang.org/protobuf/internal/encoding/json
+google.golang.org/protobuf/internal/encoding/messageset
+google.golang.org/protobuf/internal/encoding/tag
+google.golang.org/protobuf/internal/encoding/text
+google.golang.org/protobuf/internal/errors
+google.golang.org/protobuf/internal/filedesc
+google.golang.org/protobuf/internal/filetype
+google.golang.org/protobuf/internal/flags
+google.golang.org/protobuf/internal/genid
+google.golang.org/protobuf/internal/impl
+google.golang.org/protobuf/internal/order
+google.golang.org/protobuf/internal/pragma
+google.golang.org/protobuf/internal/protolazy
+google.golang.org/protobuf/internal/set
+google.golang.org/protobuf/internal/strs
+google.golang.org/protobuf/internal/version
+google.golang.org/protobuf/proto
+google.golang.org/protobuf/protoadapt
+google.golang.org/protobuf/reflect/protodesc
+google.golang.org/protobuf/reflect/protoreflect
+google.golang.org/protobuf/reflect/protoregistry
+google.golang.org/protobuf/runtime/protoiface
+google.golang.org/protobuf/runtime/protoimpl
+google.golang.org/protobuf/types/descriptorpb
+google.golang.org/protobuf/types/gofeaturespb
+google.golang.org/protobuf/types/known/anypb
+google.golang.org/protobuf/types/known/durationpb
+google.golang.org/protobuf/types/known/timestamppb
+# gopkg.in/ini.v1 v1.67.0
+## explicit
+gopkg.in/ini.v1
+# gopkg.in/natefinch/lumberjack.v2 v2.0.0
+## explicit
+gopkg.in/natefinch/lumberjack.v2
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3

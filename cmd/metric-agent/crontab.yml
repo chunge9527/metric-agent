@@ -1,0 +1,17 @@
+# crontab.yaml - 进程守护配置
+# 对应 model.GuardianConfigList 结构体
+# 每个节点本地配置文件，定义需要守护的监控组件列表
+# 守护巡检每分钟执行一次，按组件独立计数，互不影响
+#
+# 每条配置项说明：
+#   componentName     : 组件类型名称，必填
+#   ips               : 组件部署的IP数组，必填；宿主机任意IP命中数组中任意一项即执行守护逻辑
+#   healthCheckScript : 健康检查Shell脚本，必填；退出码0判定存活
+#   startScript       : 启动Shell脚本（可选）；组件异常时执行拉起
+
+# VictoriaMetrics Agent 守护
+- componentName: vmagent
+  ips:
+    - "10.0.0.100"
+  healthCheckScript: "pgrep -f vmagent > /dev/null && exit 0 || exit 1"
+  startScript: "systemctl start vmagent"

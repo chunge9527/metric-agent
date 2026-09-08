@@ -1,0 +1,14 @@
+# metricFileConfig-node-001.yaml - 节点个性化配置清单（Nacos侧）
+# 对应 model.MetricConfigList 结构体
+# 对应 Nacos dataId 格式：metricFileConfig_{agent.group}_{agent.id}（此处示例 group=k8s, id=node-001）
+# 由 Nacos 配置中心管理，优先级高于公共配置 metricFileConfig_{agent.group}
+# 当此配置不存在时，Agent 自动回退到公共配置
+
+# 节点专属 VictoriaMetrics 配置
+- fileName: scheduledConfig
+  group: k8s
+  storePath: ./
+  enableClean: false
+  reFileName: 
+  fileMode: 0755
+  reloadScript:

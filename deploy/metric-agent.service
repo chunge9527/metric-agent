@@ -1,0 +1,66 @@
+[Unit]
+Description=MetricAgent - 轻量级监控节点运维代理
+Documentation=https://metric-agent.local/docs
+After=network.target
+Wants=network.target
+
+[Service]
+# 运行用户（建议创建专用用户，示例：useradd -r -s /sbin/nologin metric-agent）
+User=metric-agent
+Group=metric-agent
+
+# 部署目录（二进制 + 配置文件所在目录）
+# 重要：main.go 中 --config 和 --logs 的默认值是相对路径
+#   config: ./metricAgent.yml
+#   logs:   ./logs/metricAgent.log
+# 因此 WorkingDirectory 必须设置为部署目录，保证相对路径正确解析
+WorkingDirectory=/opt/metric-agent
+
+# 可执行文件启动命令
+# --bind-addr 默认值 "0.0.0.0:9092"（与 constants.go DefaultBindAddr 一致）
+# --config 默认值 "./metricAgent.yml"
+# --logs 默认值 "./logs/metricAgent.log"
+# 如果文件都按默认名部署在 /opt/metric-agent/ 下，后两个参数可省略
+ExecStart=/opt/metric-agent/metric-agent \
+    --bind-addr 0.0.0.0:9092
+
+# 进程组：只针对主进程发信号，不影响子进程（Shell 脚本退出时子进程已被 killProcess 清理）
+KillMode=process
+
+# 优雅关闭：SIGTERM，最多 30 秒超时后 SIGKILL
+# WaitForShutdown 内部：HTTP Shutdown(10s) → cleanup(15s) → os.Exit(0)
+ExecStop=/bin/kill -SIGTERM $MAINPID
+TimeoutStopSec=30
+
+# 重启策略：无论什么原因退出都自动拉起（监控节点需要持续在线）
+Restart=always
+RestartSec=5
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# 环境变量
+Environment=GIN_MODE=release
+
+# ============ 安全加固 ============
+# 临时文件独立目录（renameOrCopy 已处理跨设备 fallback，PrivateTmp 不影响文件上传）
+PrivateTmp=yes
+
+# 系统保护：full 模式保护 /usr /boot /etc 等系统目录不被写，
+# /opt/metric-agent 完整可写（日志、上传、配置分发、cron 脚本执行都在此目录下）
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/metric-agent
+
+# 禁止访问特殊文件系统
+NoDevices=yes
+# 禁止修改内核参数/模块
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# 禁止提升权限
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
