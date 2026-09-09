@@ -21,6 +21,7 @@ var (
 	globalCleaner *LogCleaner
 	globalLevel   *slog.LevelVar // 支持运行时动态调整级别
 	closeOnce     sync.Once      // 保证 Close 只执行一次
+	initMu        sync.Mutex     // 保护 InitFileLogger 的热重载原子性
 )
 
 // ============ 初始化 ============
@@ -31,10 +32,25 @@ var (
 // PRD 5.6：每次轮转完成后触发过期清理
 // PRD 5.7：cfg 提供级别、单文件大小、保留天数配置
 // 同时启动后台跨天检测 goroutine，并执行首次过期清理
+// P1-4: 支持热重载——第二次调用会先 Stop 旧 rotator 再创建新的，防止 goroutine 泄漏
+//
+//	同时重置 closeOnce，让下一次 Close 能正确执行（sync.Once 不能 reset）
 func InitFileLogger(logPath string, cfg model.LogConfig) error {
+	initMu.Lock()
+	defer initMu.Unlock()
+
 	// 解析路径
 	logDir := filepath.Dir(logPath)
 	prefix := extractPrefix(logPath)
+
+	// P1-4: 热重载保护——先停旧的，防止旧 goroutine 继续写同一个文件
+	if globalRotator != nil {
+		_ = globalRotator.Stop()
+		globalRotator = nil
+	}
+	// 重置 closeOnce：Close 是 sync.Once，第一次 Close 后 Done 标记永久为 true
+	// 热重载时必须重置才能让下一次 Close 生效
+	closeOnce = sync.Once{}
 
 	// 创建清理器（轮转后需要用到）
 	cleaner := NewLogCleaner(logDir, prefix, cfg.MaxRetainDays)
@@ -43,7 +59,7 @@ func InitFileLogger(logPath string, cfg model.LogConfig) error {
 	// 创建轮转器，注册轮转回调（每次轮转后执行过期清理，满足 PRD 5.6）
 	rotator, err := NewDailyRotator(logDir, prefix, cfg.MaxFileSize, func() {
 		if cleaner != nil {
-			_, _ = cleaner.CleanExpired()
+			_, _ = cleaner.CleanExpired() // 轮转回调里的清理失败不需要打日志（避免递归调 logger）
 		}
 	})
 	if err != nil {
@@ -128,13 +144,29 @@ func newMultiWriter(writers ...io.Writer) *multiWriter {
 	return &multiWriter{writers: writers}
 }
 
+// Write 依次写入所有 writer，P0-3 修复：某个 writer 失败不中断整条日志
+// 场景：stdout 正常输出，rotator 因磁盘满失败——不能让整条日志静默丢失
+// 策略：全部写完后返回最后一个遇到的 error，让上层知道有 writer 失败但至少 stdout 已输出
 func (mw *multiWriter) Write(p []byte) (n int, err error) {
+	var firstErr error
 	for _, w := range mw.writers {
-		if w != nil {
-			if n, err = w.Write(p); err != nil {
-				return n, err
+		if w == nil {
+			continue
+		}
+		wn, werr := w.Write(p)
+		if werr != nil {
+			// 记录第一个错误但继续写其他 writer（让日志至少到达 stdout）
+			if firstErr == nil {
+				firstErr = werr
 			}
 		}
+		if wn > n {
+			n = wn
+		}
+	}
+	if firstErr != nil {
+		// 返回第一个错误让 slog 知道有问题，但 stdout 等其他 writer 已经输出过了
+		return n, firstErr
 	}
 	return len(p), nil
 }
@@ -183,25 +215,29 @@ func GetLogger() *slog.Logger {
 func Close() {
 	closeOnce.Do(func() {
 		// 先执行一次过期清理
-		if globalCleaner != nil && globalRotator != nil {
-			deleted, err := globalCleaner.CleanExpired()
-			if err != nil && globalLogger != nil {
-				globalLogger.Warn("关闭前过期日志清理失败", "error", err)
-			} else if globalLogger != nil && deleted > 0 {
-				globalLogger.Info("关闭前过期日志清理完成", "deleted", deleted)
+		if globalCleaner != nil {
+			deleted, failed := globalCleaner.CleanExpired()
+			if globalLogger != nil {
+				if len(failed) > 0 {
+					globalLogger.Warn("关闭前过期日志清理部分失败", "failedCount", len(failed), "failedFiles", strings.Join(failed, ","))
+				}
+				if deleted > 0 {
+					globalLogger.Info("关闭前过期日志清理完成", "deleted", deleted)
+				}
 			}
 		}
 
 		// 停止轮转器（停止后台协程 + Sync + Close 文件）
 		if globalRotator != nil {
 			_ = globalRotator.Stop()
+			globalRotator = nil
 		}
 	})
 }
 
 // TriggerClean 手动触发一次过期日志清理（供外部调用，如轮转后）
-// 返回删除的文件数
-func TriggerClean() (int, error) {
+// 返回：删除的文件数、删除失败的文件名列表
+func TriggerClean() (int, []string) {
 	if globalCleaner != nil {
 		return globalCleaner.CleanExpired()
 	}

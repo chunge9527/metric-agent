@@ -20,6 +20,9 @@ type LogCleaner struct {
 	logDir       string // 日志目录
 	prefix       string // 文件名前缀
 	maxRetainDay int    // 最大保留天数
+
+	// 预编译正则，避免每次 CleanExpired 都重新编译（regexp 编译开销不小）
+	pattern *regexp.Regexp
 }
 
 // NewLogCleaner 创建过期日志清理器
@@ -33,41 +36,41 @@ func NewLogCleaner(logDir, prefix string, maxRetainDay int) *LogCleaner {
 		logDir:       logDir,
 		prefix:       prefix,
 		maxRetainDay: days,
+		// P1-1: 预编译正则，prefix 在构造时固定，无需每次清理重编译
+		pattern: regexp.MustCompile(
+			`^` + regexp.QuoteMeta(prefix) + `-(\d{4}-\d{2}-\d{2})-(\d+)\.log$`,
+		),
 	}
 }
 
 // CleanExpired 执行过期日志清理
 // 扫描日志目录中匹配 {prefix}-yyyy-MM-dd-{seq}.log 的文件，
 // 判断文件名中的日期，早于 (当前日期 - maxRetainDay) 的文件直接删除
-// 返回：删除的文件数、错误信息
-func (c *LogCleaner) CleanExpired() (int, error) {
+// 返回：删除的文件数、删除失败的文件名列表（用于上层告警）
+// P1-2: 删除失败不再静默吞掉，收集文件名返回给上层
+func (c *LogCleaner) CleanExpired() (int, []string) {
 	// 确保目录存在
 	if _, err := os.Stat(c.logDir); err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil // 目录不存在无需清理
 		}
-		return 0, fmt.Errorf("检查日志目录失败: %w", err)
+		return 0, []string{fmt.Sprintf("检查日志目录失败: %v", err)}
 	}
 
 	// 计算过期截止日期：today - maxRetainDay
 	cutoffDate := time.Now().AddDate(0, 0, -c.maxRetainDay)
 	cutoffDateStr := cutoffDate.Format(constant.LogRotateDateLayout)
 
-	// 匹配规则：{prefix}-yyyy-MM-dd-{seq}.log
-	// 先匹配前缀+日期部分，再从日期字符串解析
+	// 快速前置过滤用的前缀
 	prefixDate := c.prefix + "-"
 
 	entries, err := os.ReadDir(c.logDir)
 	if err != nil {
-		return 0, fmt.Errorf("读取日志目录失败: %w", err)
+		return 0, []string{fmt.Sprintf("读取日志目录失败: %v", err)}
 	}
 
-	// 编译正则：匹配 {prefix}-YYYY-MM-DD-NNN.log 格式
-	pattern := regexp.MustCompile(
-		`^` + regexp.QuoteMeta(c.prefix) + `-(\d{4}-\d{2}-\d{2})-(\d+)\.log$`,
-	)
-
 	deletedCount := 0
+	var failedFiles []string
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -80,8 +83,8 @@ func (c *LogCleaner) CleanExpired() (int, error) {
 			continue
 		}
 
-		// 正则精确匹配并提取日期
-		matches := pattern.FindStringSubmatch(name)
+		// 用预编译正则精确匹配并提取日期
+		matches := c.pattern.FindStringSubmatch(name)
 		if len(matches) != 3 {
 			continue
 		}
@@ -95,11 +98,11 @@ func (c *LogCleaner) CleanExpired() (int, error) {
 		// 过期，删除
 		filePath := filepath.Join(c.logDir, name)
 		if err := os.Remove(filePath); err != nil {
-			// 删除失败不中断，继续清理其他文件
+			failedFiles = append(failedFiles, name)
 			continue
 		}
 		deletedCount++
 	}
 
-	return deletedCount, nil
+	return deletedCount, failedFiles
 }
