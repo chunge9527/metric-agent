@@ -124,17 +124,22 @@ func (r *DailyRotator) createNewActiveFile(today string) error {
 }
 
 // rotateExisting 将已有的活跃文件轮转走（重命名为 {prefix}-yyyy-MM-dd-{seq}.log）
+// 轮转文件名使用文件 ModTime 的日期，而非当前时间——因为被轮转的文件内容属于它实际写入的日期
 func (r *DailyRotator) rotateExisting(activePath string) error {
 	if r.currentFile != nil {
 		r.currentFile.Close()
 		r.currentFile = nil
 	}
 
-	now := time.Now()
-	today := now.Format(constant.LogRotateDateLayout)
-	seq := r.findMaxSeq(today) + 1
+	// 获取文件实际修改时间作为轮转文件名的日期
+	info, err := os.Stat(activePath)
+	if err != nil {
+		return fmt.Errorf("读取旧日志文件信息失败: %w", err)
+	}
+	contentDate := info.ModTime().Format(constant.LogRotateDateLayout)
+	seq := r.findMaxSeq(contentDate) + 1
 
-	rotatedName := fmt.Sprintf(constant.LogRotateFilePattern, r.prefix, today, seq)
+	rotatedName := fmt.Sprintf(constant.LogRotateFilePattern, r.prefix, contentDate, seq)
 	rotatedPath := filepath.Join(r.logDir, rotatedName)
 
 	if err := os.Rename(activePath, rotatedPath); err != nil {
@@ -224,7 +229,7 @@ func (r *DailyRotator) Write(p []byte) (n int, err error) {
 // doRotate 执行轮转（内部调用，调用者需持有 r.mu）
 // 逻辑：
 //  1. 关闭当前文件
-//  2. 重命名为 {prefix}-date-{seq}.log
+//  2. 重命名为 {prefix}-date-{seq}.log（date 使用被轮转内容所属日期 r.currentDate，而非 newDate）
 //  3. 如果日期变了（跨天），重置 seq 为 0；否则 seq+1
 //  4. 创建新的 {prefix}.log
 //     注意：本方法内部不调用 onRotate 回调——回调由调用方在释放锁后触发，避免死锁
@@ -239,14 +244,23 @@ func (r *DailyRotator) doRotate(newDate string) error {
 
 	activePath := filepath.Join(r.logDir, r.prefix+".log")
 
-	// 计算新序号
+	// 轮转文件名应使用【被轮转内容所属日期】，而非轮转发生的日期
+	// 跨天轮转时：r.currentDate 是旧日期（内容实际归属的日期），newDate 是新日期
+	rotatedDate := r.currentDate
+	if rotatedDate == "" {
+		// 启动时 currentDate 还未初始化，回退用 newDate
+		rotatedDate = newDate
+	}
+
+	// 计算新序号（基于 rotatedDate 扫描已有轮转文件）
 	var newSeq int
 	if newDate == r.currentDate {
-		// 同一天，序号 +1
+		// 同一天轮转，序号 +1
 		newSeq = r.currentSeq + 1
 	} else {
-		// 跨天，序号重置为 0（但要先扫描这天是否已有轮转文件）
-		newSeq = r.findMaxSeq(newDate)
+		// 跨天轮转：被轮转的内容属于 rotatedDate（旧日期），
+		// 序号应基于 rotatedDate 扫描已有文件后 +1
+		newSeq = r.findMaxSeq(rotatedDate)
 		if newSeq < 0 {
 			newSeq = 0
 		} else {
@@ -254,8 +268,8 @@ func (r *DailyRotator) doRotate(newDate string) error {
 		}
 	}
 
-	// 重命名活跃文件为轮转文件
-	rotatedName := fmt.Sprintf(constant.LogRotateFilePattern, r.prefix, newDate, newSeq)
+	// 重命名活跃文件为轮转文件（使用内容所属日期 rotatedDate）
+	rotatedName := fmt.Sprintf(constant.LogRotateFilePattern, r.prefix, rotatedDate, newSeq)
 	rotatedPath := filepath.Join(r.logDir, rotatedName)
 
 	// 如果活跃文件存在则重命名（启动时可能还没文件）
@@ -265,7 +279,7 @@ func (r *DailyRotator) doRotate(newDate string) error {
 		}
 	}
 
-	// 更新状态
+	// 更新状态为新日期（新活跃文件的日期）
 	r.currentDate = newDate
 	r.currentSeq = newSeq
 

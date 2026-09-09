@@ -348,6 +348,11 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
 		return false
 	}
+	if content == "" {
+		logger.Warn("拉取到的配置内容为空，跳过写入",
+			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
+		return false
+	}
 
 	// 与 handleListenerCallback 共享 per-groupKey 锁
 	mu := s.perConfigLock(t.groupKey())
@@ -409,6 +414,12 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	mu := s.perConfigLock(t.groupKey())
 	mu.Lock()
 	defer mu.Unlock()
+
+	if newContent == "" {
+		logger.Warn("监听回调：配置内容为空，跳过写入",
+			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
+		return
+	}
 
 	finalPath := t.storePath + t.finalName
 	if err := s.writeConfig(t, newContent, finalPath); err != nil {
