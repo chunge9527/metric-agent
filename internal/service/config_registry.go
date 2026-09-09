@@ -6,16 +6,19 @@ import (
 )
 
 // ListenRegistryItem 本地监听注册表单条记录（PRD 3.2.3）
-// 纯定时拉取模式下"监听"实为本地注册表，用于去重、增量判定与孤儿文件清理
+// ItemKey = md5(namespace + '#' + group + '#' + dataId + '#' + StorePath + '#' + ReFileName)
+// ConfigCode 用于 MetricConfig 层 configCode 去重和跨清单优先级判定，不参与 ItemKey 生成
 type ListenRegistryItem struct {
-	// GroupKey 唯一主键，格式：namespace + '##' + group + '##' + dataId
-	GroupKey string
+	// ItemKey 唯一主键
+	ItemKey string
 	// Namespace 命名空间
 	Namespace string
 	// Group 配置分组
 	Group string
-	// DataId 配置项标识
+	// DataId 配置项标识（fileName）
 	DataId string
+	// ConfigCode 配置项编号（PRD 3.2.2 新增，用于 configCode 排重和跨清单优先级）
+	ConfigCode string
 	// StorePath 原始storePath（已自动补全路径分隔符）
 	StorePath string
 	// FinalName 计算后的最终文件名
@@ -24,12 +27,14 @@ type ListenRegistryItem struct {
 	ReFileName string
 	// FileMode 最终文件权限（八进制）
 	FileMode os.FileMode
+	// ReloadScript 重载脚本
+	ReloadScript string
 }
 
 // ListenRegistry 监听注册表（全局并发安全，读写加锁）
 type ListenRegistry struct {
 	mu    sync.RWMutex
-	items map[string]*ListenRegistryItem // key: groupKey
+	items map[string]*ListenRegistryItem // key: ItemKey
 }
 
 // NewListenRegistry 创建监听注册表
@@ -37,39 +42,50 @@ func NewListenRegistry() *ListenRegistry {
 	return &ListenRegistry{items: make(map[string]*ListenRegistryItem)}
 }
 
-// Add 注册一条记录；groupKey 已存在时返回 false（去重）
+// Add 注册一条记录；ItemKey 已存在时返回 false（去重）
 func (r *ListenRegistry) Add(item *ListenRegistryItem) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.items[item.GroupKey]; ok {
+	if _, ok := r.items[item.ItemKey]; ok {
 		return false
 	}
-	r.items[item.GroupKey] = item
+	r.items[item.ItemKey] = item
 	return true
 }
 
-// Get 按 groupKey 查询记录
-func (r *ListenRegistry) Get(groupKey string) (*ListenRegistryItem, bool) {
+// Get 按 ItemKey 查询记录
+func (r *ListenRegistry) Get(itemKey string) (*ListenRegistryItem, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	it, ok := r.items[groupKey]
+	it, ok := r.items[itemKey]
 	return it, ok
 }
 
-// Exists 判断 groupKey 是否存在
-func (r *ListenRegistry) Exists(groupKey string) bool {
-	_, ok := r.Get(groupKey)
+// Exists 判断 ItemKey 是否存在
+func (r *ListenRegistry) Exists(itemKey string) bool {
+	_, ok := r.Get(itemKey)
 	return ok
 }
 
-// Remove 移除记录；不存在返回 false
-func (r *ListenRegistry) Remove(groupKey string) bool {
+// Update 按 ItemKey 更新注册表条目；不存在时返回 false
+func (r *ListenRegistry) Update(item *ListenRegistryItem) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.items[groupKey]; !ok {
+	if _, ok := r.items[item.ItemKey]; !ok {
 		return false
 	}
-	delete(r.items, groupKey)
+	r.items[item.ItemKey] = item
+	return true
+}
+
+// Remove 移除记录；不存在返回 false
+func (r *ListenRegistry) Remove(itemKey string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[itemKey]; !ok {
+		return false
+	}
+	delete(r.items, itemKey)
 	return true
 }
 

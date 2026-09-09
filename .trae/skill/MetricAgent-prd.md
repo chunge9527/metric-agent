@@ -126,11 +126,15 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
 #### 3.2.2、配置清单拉取
 
-**需求描述：** 从nacos拉取个性化配置，个性化配置拉取失败、配置内容为空或空数组时，降级拉取公共配置
+**需求描述：** 从nacos拉取个性化配置和公共配置，支持个性化配置继承公共配置，按照configCode去重，个性化配置优先级更高。
 
 **业务规则：**
 
-* Agent 初始化时，开启定时任务，由定时任务从nacos优先拉取个性化配置清单，如果个性化配置清单拉取失败、配置内容为空或空数组时，则降级拉取公共配置清单，如果公共配置拉取失败、配置内容为空或空数组时，打印告警日志，本次任务执行结束；Agent 初始化不执行拉取配置清单功能；
+* Agent 初始化时，开启定时任务，由定时任务从nacos优先拉取个性化配置清单，再拉取公共配置清单，Agent 初始化不执行拉取配置清单功能；
+
+* 如果个性化配置清单拉取失败、配置内容为空或空数组时，打印告警日志，继续拉取公共配置清单；如果公共配置清单拉取失败、配置内容为空或空数组时，打印告警日志；两种配置拉取都失败，打印告警日志，本次任务执行结束。
+
+* 个性化配置和公共配置先单独根据configCode去重，再根据优先级合并个性化配置和公共配置。
 
 * 定时任务执行时间间隔配置在metricAgent.yml中，见属性config.pullInterval，单位分钟，定时任务增加**任务锁（互斥锁）**，任务执行期间拒绝下一轮调度并打印警告日志，任务执行完成打印耗时、监听配置个数、移除监听个数等日志。
 
@@ -142,19 +146,21 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
   ```
 
 
-* **配置优先级与回退策略**：
+* **配置去重与优先级策略**：
 
-  * 个性化配置存在且内容非空时，使用个性化配置；
+  * 如果个性化配置中有重复的configCode，按照先配置先生效的原则去重。
 
-  * 若个性化配置拉取失败（网络错误、配置不存在、内容为空或空数组等），则拉取公共配置作为兜底；
+  * 如果公共配置中有重复的configCode，按照先配置先生效的原则去重。
 
-  * 公共配置也拉取失败（网络错误、配置不存在、内容为空等），打印警告日志，维持当前监听列表不变，不改动本地文件、不修改监听注册表，本次任务执行结束。
+  * 个性化配置中配置项优先级高于公共配置中的配置项，是否是同一个配置项使用configCode判断。
 
 * 个性化配置清单和公共配置清单文件都不注册监听，采用定时任务主动拉取，清单中配置的二级配置才注册监听；
 
 * 个性化配置清单和公共配置清单都是yaml格式文件，解析内容按照yaml格式解析，解析结果必须是非 nil 数组，否则视为本次配置清单拉取失败，打印告警日志，打印配置dataid，不改动本地监听注册表，本次任务执行结束，解析成功打印当前配置加载dataid；
 
 * 个性化配置清单和公共配置清单内容都是数组结构，支持同时管理多份监控组件配置文件，每条配置项包含5个核心字段；
+
+  * configCode：配置项编号，必填，仅允许字母、数字、下划线、横线
 
   * fileName：目标配置文件名称，直接作为 Nacos 拉取的 dataId，非必填
 
@@ -180,10 +186,12 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
 // 本地监听注册表单条记录结构（全局并发安全，读写加锁）  
 type ListenRegistryItem struct {  
-GroupKey string // groupKey = namespace + '##' + group + '##' + dataId，注册表唯一主键  
+ItemKey string // itemKey= md5(namespace + '#' + group + '#' + dataId+ '#' + StorePath+  '#' + ReFileName)，注册表唯一主键  
 Namespace string  
-Group string  
-DataId string  
+Group string //group  
+DataId string //fileName
+
+ConfigCode string  
 StorePath string // 原始storePath（已自动补全路径分隔符）  
 FinalName string // 计算后的最终文件名  
 ReFileName string  
@@ -191,7 +199,7 @@ ReFileName string
 // 监听注册表  
 type ListenRegistry struct {  
 sync.RWMutex  
-Items map[string]*ListenRegistryItem // key: groupKey  
+Items map[string]*ListenRegistryItem // key: itemKey  
 }
 
 <br />
@@ -214,7 +222,7 @@ Items map[string]*ListenRegistryItem // key: groupKey
 
     * 遍历查询到的配置列表，如果当前配置不存在于本地监听注册表则拉取配置、执行配置处理逻辑、注册监听，监听注册成功存入本地监听注册表，监听失败打印警告日志，继续处理下一条数据。
 
-  * 配置监听注册注意去重，根据`groupKey`去重，使用本地监听注册表去重。
+  * 配置监听注册注意去重，根据`itemKey`去重，使用本地监听注册表去重。
 
   * 任意一条数据处理逻辑异常，不影响其他数据继续处理。
 

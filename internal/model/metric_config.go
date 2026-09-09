@@ -2,6 +2,9 @@ package model
 
 // MetricConfig 二级配置清单项，对应 Nacos 配置清单（metricFileConfig_{agent.group}_{agent.id} 或 metricFileConfig_{agent.group}）中的单条配置
 type MetricConfig struct {
+	// ConfigCode 配置项编号，必填，仅允许字母、数字、下划线、横线（PRD 3.2.2）
+	// 用于 MetricConfig 原始条目层按 configCode 去重和跨清单合并优先级判定
+	ConfigCode string `yaml:"configCode" json:"config_code"`
 	// FileName 目标配置文件名称，直接作为Nacos拉取的dataId，非必填；为空时按 group 查询该分组下所有配置
 	FileName string `yaml:"fileName" json:"file_name"`
 	// Group 配置文件分组，必填
@@ -17,6 +20,10 @@ type MetricConfig struct {
 	FileMode string `yaml:"fileMode" json:"file_mode"`
 	// ReloadScript 重载shell脚本，未配置则不执行
 	ReloadScript string `yaml:"reloadScript" json:"reload_script"`
+
+	// Source 配置来源标记（"personal" / "public"），非 YAML 字段
+	// 在 LoadConfigList 的 tryParseList 之后、dedup/merge 之前设置
+	Source string `yaml:"-" json:"-"`
 }
 
 // MetricConfigList 二级配置清单类型

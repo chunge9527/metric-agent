@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +23,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// configCodePattern configCode 正则：仅允许字母、数字、下划线、横线（PRD 3.2.2 L163）
+var configCodePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // ConfigServiceParams 配置管理服务构造参数
 type ConfigServiceParams struct {
@@ -72,20 +77,32 @@ type ConfigService struct {
 	pullRunning  bool
 	pullInterval time.Duration // 实际生效的拉取间隔（StartPullLoop 赋值，用于日志/测试）
 
-	// 监听回调串行化：按 groupKey 粒度加锁，防止 Nacos 连续推送同一 dataId 变更时
+	// 监听回调串行化：按 itemKey 粒度加锁，防止 Nacos 连续推送同一 dataId 变更时
 	// 多个 on-change goroutine 并发操作同一个 finalPath（writeConfig 备份/重命名竞争）
 	listenerMuMu sync.Mutex             // 保护 listenerMu map 自身的并发访问
-	listenerMu   map[string]*sync.Mutex // key: groupKey，value: 该配置项的串行化锁
+	listenerMu   map[string]*sync.Mutex // key: itemKey，value: 该配置项的串行化锁
 }
 
-// configListResult 配置清单拉取结果
+// configListResult 配置清单拉取+去重+合并+展开的完整结果
+// PRD 3.2.2：个性化配置和公共配置都拉取，各自先按 configCode 去重（先配置先生效），
+// 再合并（同 configCode 个性化优先覆盖公共），展开后按 itemKey 去重
 type configListResult struct {
-	configs model.MetricConfigList
-	source  string // "personal" 或 "public"
-	dataID  string
+	// 个性化配置拉取状态
+	personalDataID string
+	personalOK     bool // 个性化是否成功拉取并解析为非空数组
+	// 公共配置拉取状态
+	publicDataID string
+	publicOK     bool // 公共是否成功拉取并解析为非空数组
+
+	// 合并后的 MetricConfigList（已完成 configCode 层去重 + 跨清单合并，个性化优先）
+	mergedConfigs model.MetricConfigList
+	// 展开后的最终结果（已 itemKey 去重）
+	mergedTargets map[string]*targetConfig
+	// enableClean 触发的清理目录列表（来自个性化+公共，需去重）
+	cleanStorePaths []string
 }
 
-// targetConfig 展开后的具体二级配置（去重与分发的最小单元）
+// targetConfig 展开后的具体二级配置（itemKey 去重与分发的最小单元）
 type targetConfig struct {
 	namespace    string
 	group        string
@@ -95,10 +112,24 @@ type targetConfig struct {
 	reloadScript string
 	finalName    string
 	fileMode     os.FileMode // 最终文件权限，八进制
+	configCode   string      // PRD 3.2.2 新增，用于跨清单 configCode 去重和 itemKey 生成
+	source       string      // "personal" 或 "public"，标识配置来源（PRD 3.2.2）
+
+	// itemKey_ 缓存字段：buildTarget 时一次性算出，后续 itemKey() 直接返回
+	// 输入字段（ns/group/dataId/storePath/reFileName）构建后不可变，缓存安全
+	itemKey_ string
 }
 
-func (t *targetConfig) groupKey() string {
-	return t.namespace + "##" + t.group + "##" + t.dataId
+// itemKey PRD 3.2.3：md5(namespace + '#' + group + '#' + dataId + '#' + storePath + '#' + reFileName)
+// 注意分隔符是单 #，字段顺序不可调换；configCode 不参与 itemKey 生成
+func itemKeyOf(namespace, group, dataId, storePath, reFileName string) string {
+	h := md5.New()
+	h.Write([]byte(namespace + "#" + group + "#" + dataId + "#" + storePath + "#" + reFileName))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (t *targetConfig) itemKey() string {
+	return t.itemKey_
 }
 
 // NewConfigService 创建配置管理服务
@@ -120,26 +151,121 @@ func NewConfigService(cc iface.ConfigCenter, se iface.ShellExecutor, p ConfigSer
 }
 
 // LoadConfigList 加载配置清单（定时拉取模式下每次全量刷新都调用）
-// 拉取优先级：个性化 metricFileConfig_{agent.group}_{agent.id} → 公共 metricFileConfig_{agent.group}
-// 个性化失败/空/空数组 降级公共；公共也失败/空/空数组 视为失败，返回 error
+// PRD 3.2.2 语义（configCode + itemKey 改造后）：
+//
+//	阶段1：独立拉取个性化和公共配置清单，各自处理失败（两者都拉取失败才报错）
+//	阶段2：各自 MetricConfig 层按 configCode 先配置先生效去重
+//	阶段3：跨清单合并——同 configCode 个性化覆盖公共
+//	阶段4：展开为 targetConfig + itemKey 去重
+//
+// 配置清单本身不注册监听，采用定时拉取（PRD L157）
 func (s *ConfigService) LoadConfigList() (*configListResult, error) {
 	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, s.params.AgentGroup, s.params.AgentID)
 	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, s.params.AgentGroup)
 
-	if result, ok := s.tryParseList(personalDataID, "personal"); ok {
-		return result, nil
+	// 阶段1：独立拉取两份，各自处理失败
+	personalList, personalOK := s.tryParseList(personalDataID, "personal")
+	publicList, publicOK := s.tryParseList(publicDataID, "public")
+
+	// 给每条 MetricConfig 设置 Source 标记（dedup/merge 后 buildTarget 时需要保留来源）
+	for i := range personalList {
+		personalList[i].Source = "personal"
 	}
-	if result, ok := s.tryParseList(publicDataID, "public"); ok {
-		return result, nil
+	for i := range publicList {
+		publicList[i].Source = "public"
 	}
-	return nil, fmt.Errorf("个性化配置及公共配置均不可用: %s / %s", personalDataID, publicDataID)
+
+	// 两者都不可用才报错
+	if !personalOK && !publicOK {
+		return nil, fmt.Errorf("个性化配置及公共配置均拉取失败 %s / %s", personalDataID, publicDataID)
+	}
+
+	result := &configListResult{
+		personalDataID: personalDataID,
+		publicDataID:   publicDataID,
+		personalOK:     personalOK,
+		publicOK:       publicOK,
+	}
+
+	// 阶段2+3：各自 MetricConfig 层 configCode 去重 + 跨清单合并
+	// 注意：configCode 去重发生在 MetricConfig 原始条目层，所有条目都参与（不区分 fileName）
+	var dedupPersonal, dedupPublic model.MetricConfigList
+	if personalOK {
+		dedupPersonal = dedupMetricConfigList(personalList, "personal")
+	}
+	if publicOK {
+		dedupPublic = dedupMetricConfigList(publicList, "public")
+	}
+	result.mergedConfigs = mergeMetricConfigLists(dedupPersonal, dedupPublic)
+
+	logger.Info("原始配置清单去重、合并、继承处理完成",
+		"personal_dataId", personalDataID, "personal_ok", personalOK,
+		"public_dataId", publicDataID, "public_ok", publicOK,
+		"merged_configs_count", len(result.mergedConfigs),
+	)
+
+	// 阶段4：展开为 targetConfig + itemKey 去重（自然满足注册表去重）
+	result.mergedTargets, result.cleanStorePaths = s.expandAndDedup(result.mergedConfigs)
+
+	logger.Info("配置清单列表组装完成",
+		"merged_targets_count", len(result.mergedTargets),
+		"clean_store_paths", len(result.cleanStorePaths),
+	)
+
+	return result, nil
 }
 
-// tryParseList 拉取并解析单个配置清单；成功返回结果，失败返回 nil,false 并打印对应日志
-func (s *ConfigService) tryParseList(dataID, source string) (*configListResult, bool) {
+// dedupMetricConfigList MetricConfig 原始条目层按 configCode 先配置先生效去重
+// 所有条目都参与，不区分 fileName；configCode 为空或含非法字符的条目跳过（已在 validateMetricConfigEntry 校验）
+func dedupMetricConfigList(configs model.MetricConfigList, source string) model.MetricConfigList {
+	seen := make(map[string]bool, len(configs))
+	out := make(model.MetricConfigList, 0, len(configs))
+	for i := range configs {
+		cfg := &configs[i]
+		// configCode 为空/非法已在 validateMetricConfigEntry 拦截，但 dedup 单独防御一次
+		if strings.TrimSpace(cfg.ConfigCode) == "" || !configCodePattern.MatchString(cfg.ConfigCode) {
+			logger.Warn("配置项 configCode 为空或含非法字符，跳过 configCode 去重",
+				"source", source, "index", i, "configCode", cfg.ConfigCode)
+			continue
+		}
+		if seen[cfg.ConfigCode] {
+			logger.Warn("配置项 configCode 重复，先配置先生效，跳过",
+				"source", source, "index", i, "configCode", cfg.ConfigCode)
+			continue
+		}
+		seen[cfg.ConfigCode] = true
+		out = append(out, *cfg)
+	}
+	return out
+}
+
+// mergeMetricConfigLists 跨清单合并：同 configCode 个性化覆盖公共
+// personal 和 public 都必须是已各自 configCode 去重后的结果
+func mergeMetricConfigLists(personal, public model.MetricConfigList) model.MetricConfigList {
+	// 先放 personal（个性化，优先级高）
+	out := make(model.MetricConfigList, 0, len(personal)+len(public))
+	seen := make(map[string]bool, len(personal))
+	for i := range personal {
+		cfg := &personal[i]
+		seen[cfg.ConfigCode] = true
+		out = append(out, *cfg)
+	}
+	// 再补 public 中没被 personal 覆盖的
+	for i := range public {
+		cfg := &public[i]
+		if seen[cfg.ConfigCode] {
+			continue // 被个性化覆盖，跳过
+		}
+		out = append(out, *cfg)
+	}
+	return out
+}
+
+// tryParseList 拉取并解析单个配置清单；成功返回 MetricConfigList + true，失败返回 nil,false 并打印对应日志
+func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigList, bool) {
 	content, err := s.cc.GetConfig(dataID, s.params.NacosGroup)
 	if err != nil {
-		logger.Warn("配置清单拉取失败，降级拉取下一份", "source", source, "dataId", dataID, "error", err)
+		logger.Warn("配置清单拉取失败", "source", source, "dataId", dataID, "error", err)
 		return nil, false
 	}
 	if strings.TrimSpace(content) == "" {
@@ -159,122 +285,109 @@ func (s *ConfigService) tryParseList(dataID, source string) (*configListResult, 
 	}
 
 	logger.Info("配置清单加载成功", "source", source, "dataId", dataID, "count", len(configs))
-	return &configListResult{configs: configs, source: source, dataID: dataID}, true
+	return configs, true
 }
 
-// DistributeAllConfigs 串行分发所有二级配置（PRD 3.2.3）
-// 架构：配置清单走定时拉取；二级配置走 Nacos 监听（AddListener）
-//   - 新配置：首次 GetConfig → writeConfig → runReloadScript → AddListener → 加入注册表
-//   - 已存在配置：不做任何操作（Nacos 监听自动推送变更）
-//   - 已删除配置：CancelListener → 从注册表移除
-func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
-	total := len(result.configs)
-	validated := 0
-	success := 0
-	failed := 0
-
-	// 展开为具体目标配置（按 groupKey 去重），并记录需要执行清理的 storePath
+// expandAndDedup 展开 MetricConfigList 为 targetConfig map 并按 itemKey 去重
+// 此时传入的 configs 已经完成 configCode 层去重 + 跨清单合并（LoadConfigList 阶段），
+// 本函数只负责展开为 targetConfig + itemKey 去重（注册表自然满足 itemKey 唯一性）
+// 返回：targets（展开+itemKey 去重后的二级配置）、cleanStorePaths（enableClean=true 的 storePath 列表）
+// 优化：相同 group 的多个 fileName=="" 条目会缓存 searchGroupDataIds 结果，避免重复分页查询
+func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[string]*targetConfig, []string) {
 	targets := make(map[string]*targetConfig)
 	var cleanStorePaths []string
+	// cleanStorePaths 去重 set（#1：不同 MetricConfig 可能指向同 storePath + enableClean=true）
+	cleanSeen := make(map[string]bool)
 
-	for i := range result.configs {
-		cfg := &result.configs[i]
-		if !s.validateItem(cfg, i, result) {
+	// 缓存：group → dataIds 映射，避免相同 group 重复 searchGroupDataIds
+	groupDataIdsCache := make(map[string][]string)
+
+	for i := range configs {
+		cfg := &configs[i]
+		if !s.validateMetricConfigEntry(cfg, i) {
 			continue
 		}
-		validated++
 
 		storePath := normalizeStorePath(cfg.StorePath)
 
 		switch {
 		case cfg.FileName != "" && cfg.Group != "":
 			t := s.buildTarget(storePath, cfg, cfg.FileName)
-			targets[t.groupKey()] = t
-			// enableClean 仅在 fileName 为空（按 group 全量拉取）时才有意义，
-			// 单一 fileName 场景下 不需要考虑enableClean 无需打印日志
-			// if cfg.EnableClean {
-			// 	logger.Warn("配置项 enableClean=true 但 fileName 不为空，清理逻辑仅支持 fileName 为空时按 group 全量拉取",
-			// 		"source", result.source, "dataId", result.dataID,
-			// 		"fileName", cfg.FileName, "group", cfg.Group, "storePath", storePath)
-			// }
+			key := t.itemKey()
+			if _, exists := targets[key]; !exists {
+				targets[key] = t
+			} else {
+				logger.Warn("展开后 itemKey 重复，先配置先生效，跳过",
+					"index", i, "itemKey", key, "configCode", cfg.ConfigCode)
+			}
 
 		case cfg.FileName == "" && cfg.Group != "":
-			// 查询该分组下所有配置
-			dataIds, err := s.searchGroupDataIds(cfg.Group)
-			if err != nil {
-				logger.Error("查询分组配置失败，跳过该条",
-					"namespace", s.params.Namespace, "group", cfg.Group, "storePath", storePath, "error", err)
-				failed++
-				continue
+			// 缓存命中检查
+			dataIds, cached := groupDataIdsCache[cfg.Group]
+			if !cached {
+				var err error
+				dataIds, err = s.searchGroupDataIds(cfg.Group)
+				if err != nil {
+					logger.Error("查询分组配置失败，跳过该条",
+						"namespace", s.params.Namespace, "group", cfg.Group,
+						"storePath", storePath, "error", err)
+					continue
+				}
+				groupDataIdsCache[cfg.Group] = dataIds
 			}
-			if cfg.EnableClean {
+			if cfg.EnableClean && !cleanSeen[storePath] {
 				cleanStorePaths = append(cleanStorePaths, storePath)
+				cleanSeen[storePath] = true
 			}
-			// 根据group全量拉取，fileName 为空时 reFileName 没有意义
-			cfg.ReFileName = ""
+			// fileName 为空时 reFileName 没有意义，用局部 copy 避免修改原 config
+			cfgCopy := *cfg
+			cfgCopy.ReFileName = ""
 			for _, dataId := range dataIds {
-				t := s.buildTarget(storePath, cfg, dataId)
-				targets[t.groupKey()] = t
+				t := s.buildTarget(storePath, &cfgCopy, dataId)
+				key := t.itemKey()
+				if _, exists := targets[key]; !exists {
+					targets[key] = t
+				} else {
+					logger.Warn("展开后 itemKey 重复，先配置先生效，跳过",
+						"index", i, "itemKey", key, "configCode", cfg.ConfigCode)
+				}
 			}
 
 		default:
-			// group 为空已被 validateItem 拦截，理论不可达
-			logger.Warn("配置项 group 为空，跳过", "source", result.source, "dataId", result.dataID)
+			// group 为空已被 validateMetricConfigEntry 拦截，理论不可达
+			logger.Warn("配置项 group 为空，跳过", "index", i)
 		}
 	}
 
-	// 处理新增配置（已存在的跳过，Nacos 监听自动推送变更）
-	for _, t := range targets {
-		if s.registry.Exists(t.groupKey()) {
-			continue
-		}
-		if s.processTarget(t) {
-			success++
-		} else {
-			failed++
-		}
-	}
-
-	// 移除失效项
-	removed := s.removeStale(targets, result)
-
-	// enableClean 触发的配置清理（失败不影响后续，PRD 3.2.3）
-	// PRD 3.2.4：清理由二级分发触发，不独立起协程
-	s.distributeClean(result.source, result.dataID, cleanStorePaths, targets)
-
-	// 清理 cleanLastRun 中已不在本轮 cleanStorePaths 的条目
-	// 防止配置清单变更后 storePath 被删除但 cleanLastRun 条目永久残留（内存泄漏）
-	s.pruneCleanLastRun(cleanStorePaths)
-
-	logger.Info("二级配置分发、配置清理完成",
-		"source", result.source, "dataId", result.dataID,
-		"total", total,
-		"validated", validated,
-		"success", success,
-		"failed", failed,
-		"current_listeners", s.registry.Len(),
-		"removed", removed,
-	)
+	return targets, cleanStorePaths
 }
 
-// validateItem 校验配置清单条目必填字段（group/storePath 必填）
-func (s *ConfigService) validateItem(cfg *model.MetricConfig, idx int, result *configListResult) bool {
+// validateMetricConfigEntry 校验 MetricConfig 必填字段
+// PRD 3.2.2：configCode 必填、正则 ^[a-zA-Z0-9_-]+$；group 必填；storePath 必填
+func (s *ConfigService) validateMetricConfigEntry(cfg *model.MetricConfig, idx int) bool {
+	if strings.TrimSpace(cfg.ConfigCode) == "" {
+		logger.Warn("配置项缺少必填字段 configCode，跳过", "index", idx)
+		return false
+	}
+	if !configCodePattern.MatchString(cfg.ConfigCode) {
+		logger.Warn("配置项 configCode 含非法字符，仅允许字母、数字、下划线、横线",
+			"index", idx, "configCode", cfg.ConfigCode)
+		return false
+	}
 	if strings.TrimSpace(cfg.Group) == "" {
-		logger.Warn("配置项缺少必填字段 group，跳过",
-			"source", result.source, "dataId", result.dataID, "index", idx, "fileName", cfg.FileName)
+		logger.Warn("配置项缺少必填字段 group，跳过", "index", idx, "configCode", cfg.ConfigCode)
 		return false
 	}
 	if strings.TrimSpace(cfg.StorePath) == "" {
-		logger.Warn("配置项缺少必填字段 storePath，跳过",
-			"source", result.source, "dataId", result.dataID, "index", idx, "group", cfg.Group)
+		logger.Warn("配置项缺少必填字段 storePath，跳过", "index", idx, "configCode", cfg.ConfigCode)
 		return false
 	}
 	return true
 }
 
-// buildTarget 构建具体目标配置
+// buildTarget 构建具体目标配置（itemKey 也一并算好缓存）
 func (s *ConfigService) buildTarget(storePath string, cfg *model.MetricConfig, dataId string) *targetConfig {
-	return &targetConfig{
+	t := &targetConfig{
 		namespace:    s.params.Namespace,
 		group:        cfg.Group,
 		dataId:       dataId,
@@ -283,7 +396,89 @@ func (s *ConfigService) buildTarget(storePath string, cfg *model.MetricConfig, d
 		reloadScript: cfg.ReloadScript,
 		finalName:    finalNameOf(dataId, cfg.ReFileName),
 		fileMode:     parseFileMode(cfg.FileMode, myconstant.DefaultConfigFilePerm),
+		configCode:   cfg.ConfigCode,
+		source:       cfg.Source,
 	}
+	t.itemKey_ = itemKeyOf(t.namespace, t.group, t.dataId, t.storePath, t.reFileName)
+	return t
+}
+
+// DistributeAllConfigs 串行分发所有二级配置（PRD 3.2.3）
+// 架构：配置清单走定时拉取（LoadConfigList 完成拉取+展开+去重+合并）；二级配置走 Nacos 监听（AddListener）
+//   - 新配置 / AddListener 曾失败未入注册表的配置：走 !exists 分支 → GetConfig → writeConfig → runReloadScript → AddListener
+//   - 已存在配置但属性变更：CancelListener → Remove → 重新 processTarget（PRD 3.2.2 个性化优先级）
+//   - 已存在配置且属性一致：跳过（Nacos 监听已持续推送变更）
+//   - 已删除配置：CancelListener → 从注册表移除
+func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
+	targets := result.mergedTargets
+	total := len(targets)
+	success := 0
+	failed := 0
+
+	// 处理配置：新的 / AddListener 曾失败未入注册表 → processTarget；已存在但属性变更 → 重新注册；已存在且一致 → 跳过
+	for _, t := range targets {
+		existing, exists := s.registry.Get(t.itemKey())
+		if !exists {
+			// 全新配置，完整流程
+			if s.processTarget(t) {
+				success++
+			} else {
+				failed++
+			}
+			continue
+		}
+		// 已注册但属性有变更（ReloadScript/FileMode 任一不同）
+		// itemKey 本身已包含 storePath/dataId/configCode/reFileName，变更会导致 registry 查不到（走到 !exists 分支）
+		// 这里 needsReregister 只比 itemKey 没覆盖的 ReloadScript/FileMode
+		if needsReregister(existing, t) {
+			logger.Info("配置属性变更，重新注册",
+				"itemKey", t.itemKey(),
+				"old_storePath", existing.StorePath, "new_storePath", t.storePath,
+				"old_reloadScript", existing.ReloadScript, "new_reloadScript", t.reloadScript)
+			// 先取消旧监听 + 移除
+			_ = s.cc.CancelListener(existing.DataId, existing.Group)
+			s.registry.Remove(existing.ItemKey)
+			s.listenerMuMu.Lock()
+			delete(s.listenerMu, existing.ItemKey)
+			s.listenerMuMu.Unlock()
+			// 重新注册（会重新 writeConfig + register listener）
+			if s.processTarget(t) {
+				success++
+			} else {
+				failed++
+			}
+			continue
+		}
+		// 已存在且属性一致 → 跳过（Nacos 监听已持续推送变更）
+		// AddListener 失败未入注册表的条目会在下一轮定时拉取自然走 !exists 分支重新完整重试 processTarget
+	}
+
+	// 移除失效项
+	removed := s.removeStale(targets, result)
+
+	// enableClean 触发的配置清理（失败不影响后续，PRD 3.2.3 / 3.2.4）
+	s.distributeClean(result, result.cleanStorePaths, targets)
+
+	// 清理 cleanLastRun 中已不在本轮 cleanStorePaths 的条目
+	// 防止配置清单变更后 storePath 被删除但 cleanLastRun 条目永久残留（内存泄漏）
+	s.pruneCleanLastRun(result.cleanStorePaths)
+
+	logger.Info("二级配置分发、配置清理完成",
+		"personal_dataId", result.personalDataID, "personal_ok", result.personalOK,
+		"public_dataId", result.publicDataID, "public_ok", result.publicOK,
+		"total", total,
+		"success", success,
+		"failed", failed,
+		"current_listeners", s.registry.Len(),
+		"removed", removed,
+	)
+}
+
+// needsReregister 判断已注册 item 与新 targetConfig 是否需要重新注册
+// itemKey 已包含 namespace/group/dataId/storePath/reFileName，变了自然查不到 registry
+// 这里只比较 itemKey 没覆盖的 ReloadScript 和 FileMode（影响行为但不影响 itemKey 生成）
+func needsReregister(existing *ListenRegistryItem, t *targetConfig) bool {
+	return existing.ReloadScript != t.reloadScript || existing.FileMode != t.fileMode
 }
 
 // parseFileMode 解析配置项的 fileMode 字符串为 os.FileMode
@@ -336,11 +531,21 @@ func (s *ConfigService) searchGroupDataIds(group string) ([]string, error) {
 	return out, nil
 }
 
-// processTarget 首次拉取、写入、注册监听（PRD 3.2.3）
+// processTarget 拉取、写入、注册监听（PRD 3.2.3）
 // 流程：GetConfig → writeConfig → runReloadScript → AddListener → AddRegistry
 // 注册监听时通过闭包捕获 t 的上下文，变更回调异步触发 writeConfig + runReloadScript
 // 使用 perConfigLock 与 handleListenerCallback 互斥，防止极端场景下（SDK AddListener 后
 // 立即触发首次 OnChange）processTarget 的 writeConfig 与回调 writeConfig 竞争同一 finalPath
+//
+// 返回值语义：true 表示 GetConfig + writeConfig + runReloadScript + AddListener 全部成功，
+// 配置项已加入 registry 由 Nacos 监听持续推送变更；
+// false 表示任一步骤失败，配置项不加入 registry（per listenerMu 会同步清理），
+// 下一轮定时拉取自然走 !exists 分支重新执行 processTarget（完整重试）。
+//
+// #2 防止 listenerMu 内存泄漏 + 防止 manual Unlock 的 panic 风险：
+//
+//	defer mu.Unlock() 保证任何 panic 路径都能解锁；
+//	用 needCleanupListenerMu 标志在 registry 未 Add 时（含 writeConfig 失败 + AddListener 失败）清理 listenerMu 条目。
 func (s *ConfigService) processTarget(t *targetConfig) bool {
 	content, err := s.cc.GetConfig(t.dataId, t.group)
 	if err != nil {
@@ -354,13 +559,25 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 		return false
 	}
 
-	// 与 handleListenerCallback 共享 per-groupKey 锁
-	mu := s.perConfigLock(t.groupKey())
+	// 与 handleListenerCallback 共享 per-itemKey 锁
+	mu := s.perConfigLock(t.itemKey())
 	mu.Lock()
 	defer mu.Unlock()
 
+	// #2 listenerMu 清理标志：仅在 writeConfig 失败（registry 未 Add）时需要清理
+	// registry 已 Add 的场景：removeStale 会遍历 registry 正确清理 listenerMu
+	needCleanupListenerMu := false
+	defer func() {
+		if needCleanupListenerMu {
+			s.listenerMuMu.Lock()
+			delete(s.listenerMu, t.itemKey())
+			s.listenerMuMu.Unlock()
+		}
+	}()
+
 	finalPath := t.storePath + t.finalName
 	if err := s.writeConfig(t, content, finalPath); err != nil {
+		needCleanupListenerMu = true
 		logger.Error("首次写入二级配置失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
 		return false
@@ -377,41 +594,57 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 		go s.handleListenerCallback(t, data)
 	}
 	if err := s.cc.AddListener(t.dataId, t.group, onChange); err != nil {
-		logger.Warn("注册 Nacos 监听失败，已写入本地文件但后续变更不会自动同步",
+		// 监听注册失败 → 不加入 registry（否则后续轮次 DistributeAllConfigs 会误以为已注册）
+		// 下一轮定时拉取该条目自然不在 registry 中，会走 !exists 分支重新完整重试 processTarget
+		needCleanupListenerMu = true
+		logger.Error("注册 Nacos 监听失败，等待下一轮定时拉取重新注册",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 			"storePath", t.storePath, "error", err)
-		// 监听注册失败不阻塞——文件已写入，本地可用；只是后续变更是手动轮询刷新时不会再 GetConfig 这个条目
-		// 把它加入注册表但标记 listenerRegistered=false？当前注册表没有这个字段，暂时直接跳过 Add
-		// 下次定时分发时由于 registry 里没有它，会重新走到 processTarget → 再试注册监听
 		return false
 	}
 
+	// AddListener 成功 → 才加入 registry，由 Nacos 监听持续推送后续变更
 	item := &ListenRegistryItem{
-		GroupKey:   t.groupKey(),
-		Namespace:  t.namespace,
-		Group:      t.group,
-		DataId:     t.dataId,
-		StorePath:  t.storePath,
-		FinalName:  t.finalName,
-		ReFileName: t.reFileName,
-		FileMode:   t.fileMode,
+		ItemKey:      t.itemKey(),
+		Namespace:    t.namespace,
+		Group:        t.group,
+		DataId:       t.dataId,
+		ConfigCode:   t.configCode,
+		StorePath:    t.storePath,
+		FinalName:    t.finalName,
+		ReFileName:   t.reFileName,
+		FileMode:     t.fileMode,
+		ReloadScript: t.reloadScript,
 	}
 	if s.registry.Add(item) {
-		logger.Info("配置注册成功（Nacos监听已注册）", "groupKey", item.GroupKey)
-	} else {
-		// 极罕见：processTarget 执行过程中另一个 goroutine 已添加
-		// CancelListener 清理
-		_ = s.cc.CancelListener(t.dataId, t.group)
-		logger.Warn("配置已存在于注册表，取消刚注册的 Nacos 监听", "groupKey", item.GroupKey)
+		logger.Info("二级配置分发成功",
+			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
 	}
+	// registry.Add 返回 false 是死代码：
+	// perConfigLock(t.itemKey()) 已串行化了整个 writeConfig→Add 流程，
+	// 同一个 itemKey 不可能被两个 goroutine 同时走到这里。
+	// 即使极端情况发生，副作用（writeConfig + reloadScript）已落盘，也无需回滚。
+
 	return true
 }
 
 // handleListenerCallback Nacos 配置变更回调处理器
 // 由 SDK 内部监听协程触发 → 已在 processTarget 里 go 出本方法
-// 使用 per-groupKey 锁串行化同一配置项的写操作（防止连续推送并发冲突）
+// 使用 per-itemKey 锁串行化同一配置项的写操作（防止连续推送并发冲突）
+//
+// 加 panic recovery：防止 writeConfig/runReloadScript 内部 panic 后
+// 该 itemKey 的监听回调 goroutine 永久死亡，导致这个配置项不再自动更新
 func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent string) {
-	mu := s.perConfigLock(t.groupKey())
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("监听回调 panic 已捕获，本配置项后续变更可能不再自动同步",
+				"itemKey", t.itemKey(),
+				"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+				"storePath", t.storePath, "panic", fmt.Sprint(r))
+		}
+	}()
+
+	mu := s.perConfigLock(t.itemKey())
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -434,14 +667,14 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 		"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
 }
 
-// perConfigLock 获取指定 groupKey 的串行化锁（不存在则懒创建）
-func (s *ConfigService) perConfigLock(groupKey string) *sync.Mutex {
+// perConfigLock 获取指定 itemKey 的串行化锁（不存在则懒创建）
+func (s *ConfigService) perConfigLock(itemKey string) *sync.Mutex {
 	s.listenerMuMu.Lock()
 	defer s.listenerMuMu.Unlock()
-	m, ok := s.listenerMu[groupKey]
+	m, ok := s.listenerMu[itemKey]
 	if !ok {
 		m = &sync.Mutex{}
-		s.listenerMu[groupKey] = m
+		s.listenerMu[itemKey] = m
 	}
 	return m
 }
@@ -528,29 +761,29 @@ func (s *ConfigService) runReloadScript(t *targetConfig) {
 func (s *ConfigService) removeStale(targets map[string]*targetConfig, result *configListResult) int {
 	removed := 0
 	for _, item := range s.registry.Items() {
-		if _, ok := targets[item.GroupKey]; ok {
+		if _, ok := targets[item.ItemKey]; ok {
 			continue
 		}
 		// 先取消 Nacos 监听，再从本地注册表移除
 		if err := s.cc.CancelListener(item.DataId, item.Group); err != nil {
 			logger.Error("取消失效配置的 Nacos 监听失败",
-				"error", err, "groupKey", item.GroupKey, "namespace", item.Namespace,
+				"error", err, "itemKey", item.ItemKey, "namespace", item.Namespace,
 				"group", item.Group, "dataId", item.DataId)
 		} else {
 			logger.Info("移除失效配置（Nacos监听已取消）",
-				"groupKey", item.GroupKey, "namespace", item.Namespace,
+				"itemKey", item.ItemKey, "namespace", item.Namespace,
 				"group", item.Group, "dataId", item.DataId)
 		}
-		s.registry.Remove(item.GroupKey)
-		// 同步清理 per-groupKey mutex，避免长期运行时 map 无限增长
+		s.registry.Remove(item.ItemKey)
+		// 同步清理 per-itemKey mutex，避免长期运行时 map 无限增长
 		s.listenerMuMu.Lock()
-		delete(s.listenerMu, item.GroupKey)
+		delete(s.listenerMu, item.ItemKey)
 		s.listenerMuMu.Unlock()
 		removed++
 	}
 	logger.Info("移除监听完成",
 		"current_listeners", s.registry.Len(), "removed", removed,
-		"source", result.source, "dataId", result.dataID)
+		"personal_dataId", result.personalDataID, "public_dataId", result.publicDataID)
 	return removed
 }
 
@@ -578,19 +811,24 @@ func (s *ConfigService) pruneCleanLastRun(cleanStorePaths []string) {
 // distributeClean 由 DistributeAllConfigs 触发配置清理
 // PRD 3.2.4 约束：清理由二级分发功能触发，不单独使用协程实现；
 // 修复：只要当前小时命中 cleanFixHours 且本小时尚未清理过，立即执行（移除 0~10 分钟窗口限制）
-func (s *ConfigService) distributeClean(source, dataID string, cleanStorePaths []string, targets map[string]*targetConfig) {
+func (s *ConfigService) distributeClean(result *configListResult, cleanStorePaths []string, targets map[string]*targetConfig) {
+	personalDataID := result.personalDataID
+	publicDataID := result.publicDataID
+
 	if !s.params.CleanOrphanFile.Enable {
 		logger.Warn("配置清理功能已禁用（cleanOrphanFile.enable=false），跳过本次清理",
-			"source", source, "dataId", dataID)
+			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 	if len(s.cleanFixHours) == 0 {
-		logger.Warn("cleanFixHour 无有效配置，不执行配置清理", "source", source, "dataId", dataID)
+		logger.Warn("cleanFixHour 无有效配置，不执行配置清理",
+			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 	// 本轮没有任何配置项 enableClean=true
 	if len(cleanStorePaths) == 0 {
-		logger.Info("本轮没有任何配置项 enableClean=true", "source", source, "dataId", dataID)
+		logger.Info("本轮没有任何配置项 enableClean=true",
+			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 
@@ -598,20 +836,26 @@ func (s *ConfigService) distributeClean(source, dataID string, cleanStorePaths [
 	if !containsInt(s.cleanFixHours, now.Hour()) {
 		logger.Info("当前时刻不在配置清理定点小时内，跳过本次清理",
 			"current_hour", now.Hour(), "cleanFixHour", s.cleanFixHours,
-			"source", source, "dataId", dataID)
+			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 
+	// finalNameSets 从 mergedTargets 构建即可
+	// 因为 cleanStorePaths 也来自 mergedConfigs 展开阶段，storePath 覆盖自然一致
 	finalNameSets := buildFinalNameSets(targets)
+
 	for _, sp := range cleanStorePaths {
 		if names, ok := finalNameSets[sp]; ok {
-			s.cleanStorePathWithDedup(sp, names, now, source, dataID)
+			s.cleanStorePathWithDedup(sp, names, now, personalDataID, publicDataID)
+		} else {
+			logger.Warn("enableClean 的 storePath 在 finalNameSets 中找不到对应条目，跳过清理",
+				"storePath", sp)
 		}
 	}
 }
 
 // cleanStorePathWithDedup 保证每小时每个 storePath 只执行一次清理
-func (s *ConfigService) cleanStorePathWithDedup(storePath string, finalNames map[string]bool, now time.Time, source, dataID string) {
+func (s *ConfigService) cleanStorePathWithDedup(storePath string, finalNames map[string]bool, now time.Time, personalDataID, publicDataID string) {
 	hourKey := now.Format("20060102-15")
 	s.cleanMu.Lock()
 	if last, ok := s.cleanLastRun[storePath]; ok && last.Format("20060102-15") == hourKey {
@@ -835,9 +1079,9 @@ func (s *ConfigService) doPullOnce() {
 	s.DistributeAllConfigs(result)
 
 	logger.Info("定时拉取：全量刷新完成",
-		"source", result.source,
-		"dataId", result.dataID,
-		"config_count", len(result.configs),
+		"personal_dataId", result.personalDataID, "personal_ok", result.personalOK,
+		"public_dataId", result.publicDataID, "public_ok", result.publicOK,
+		"merged_count", len(result.mergedTargets),
 		"listeners_now", s.registry.Len(),
 		"duration_ms", time.Since(start).Milliseconds())
 }
@@ -925,6 +1169,20 @@ func normalizeCleanSuffixes(raw []string) []string {
 	// PRD 3.2.4：未配置 cleanSuffix 时默认为 .yml、.yaml
 	if len(out) == 0 {
 		out = append(out, myconstant.DefaultCleanSuffixes...)
+	}
+	return out
+}
+
+// dedupStrings 字符串切片去重，保持首次出现的顺序
+func dedupStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
 	}
 	return out
 }

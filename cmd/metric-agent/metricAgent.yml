@@ -5,8 +5,6 @@
 agent:
   # 节点唯一标识，必填，仅允许字母、数字、下划线、横线
   id: node-001
-  # 节点分组
-  group: k8s
   
 # 服务特性总开关，true启用，false禁用，未配置时默认全部false）
 feature:

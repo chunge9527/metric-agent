@@ -51,13 +51,17 @@ func LoadBaseConfig(configPath string) (*model.AgentConfig, error) {
 		return nil, fmt.Errorf("配置文件格式错误: %w", err)
 	}
 
+	// 填充默认值（nacos.group 默认值在这里填上）
+	fillDefaults(&cfg)
+
+	// 回填：agent.group 统一使用 nacos.group（yaml 中不再需要单独配置 agent.group）
+	// fillDefaults 已确保 nacos.group 不为空
+	cfg.Agent.Group = cfg.Nacos.Group
+
 	// 必填校验
 	if err := validateConfig(&cfg); err != nil {
 		return nil, err
 	}
-
-	// 填充默认值
-	fillDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -130,6 +134,11 @@ func validateConfig(cfg *model.AgentConfig) error {
 // fillDefaults 填充默认值
 // Feature开关默认值由IsXxxEnabled方法统一处理（nil→true，保持向后兼容）
 func fillDefaults(cfg *model.AgentConfig) {
+	// nacos.group 默认值（Nacos SDK 内部默认就是 DEFAULT_GROUP）
+	if cfg.Nacos.Group == "" {
+		cfg.Nacos.Group = myconstant.DefaultNacosGroup
+	}
+
 	if cfg.Config.PullInterval < 0 {
 		cfg.Config.PullInterval = myconstant.DefaultPullIntervalMinutes
 	}

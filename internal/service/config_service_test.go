@@ -251,27 +251,91 @@ func TestBuildFinalNameSets(t *testing.T) {
 	}
 }
 
-// ============ targetConfig.groupKey ============
+// ============ itemKey（PRD L189） ============
 
-func TestGroupKey(t *testing.T) {
-	tc := &targetConfig{namespace: "ns1", group: "g1", dataId: "d1"}
-	want := "ns1##g1##d1"
-	if tc.groupKey() != want {
-		t.Errorf("groupKey = %q, want %q", tc.groupKey(), want)
+func TestItemKey(t *testing.T) {
+	// PRD：md5(namespace + '#' + group + '#' + dataId + '#' + storePath + '#' + reFileName)
+	// 分隔符是单 #，configCode 不参与 itemKey 生成
+	tc := &targetConfig{
+		namespace:  "ns1",
+		group:      "g1",
+		dataId:     "d1",
+		storePath:  "/a/",
+		reFileName: "renamed",
+	}
+	tc.itemKey_ = itemKeyOf(tc.namespace, tc.group, tc.dataId, tc.storePath, tc.reFileName)
+	want := itemKeyOf("ns1", "g1", "d1", "/a/", "renamed")
+	got := tc.itemKey()
+	if got != want {
+		t.Errorf("itemKey = %q, want %q", got, want)
+	}
+
+	// reFileName 为空也要拼接
+	tc2 := &targetConfig{
+		namespace: "ns1",
+		group:     "g1",
+		dataId:    "d1",
+		storePath: "/a/",
+	}
+	tc2.itemKey_ = itemKeyOf(tc2.namespace, tc2.group, tc2.dataId, tc2.storePath, tc2.reFileName)
+	want2 := itemKeyOf("ns1", "g1", "d1", "/a/", "")
+	got2 := tc2.itemKey()
+	if got2 != want2 {
+		t.Errorf("itemKey(reFileName空) = %q, want %q", got2, want2)
+	}
+
+	// storePath 不同 → itemKey 不同
+	tc3 := &targetConfig{
+		namespace: "ns1",
+		group:     "g1",
+		dataId:    "d1",
+		storePath: "/b/",
+	}
+	tc3.itemKey_ = itemKeyOf(tc3.namespace, tc3.group, tc3.dataId, tc3.storePath, tc3.reFileName)
+	if tc2.itemKey() == tc3.itemKey() {
+		t.Error("不同 storePath → itemKey 应不同")
+	}
+
+	// configCode 不同但其他字段完全一样 → itemKey 相同（configCode 不参与）
+	tc2.configCode = "CODE_A"
+	tc3.storePath = tc2.storePath
+	tc3.group = tc2.group
+	tc3.namespace = tc2.namespace
+	tc3.dataId = tc2.dataId
+	tc3.configCode = "CODE_B"
+	// tc3 改了 storePath 后需重算 itemKey_（虽然我们在验证 configCode 不参与，这里保持两个对象 itemKey_ 一致来断言）
+	tc3.itemKey_ = tc2.itemKey_
+	if tc2.itemKey() != tc3.itemKey() {
+		t.Error("仅 configCode 不同 → itemKey 应相同（configCode 不参与生成）")
 	}
 }
 
-// ============ LoadConfigList / tryParseList ============
+// ============ LoadConfigList（configCode 去重 + 合并 + itemKey 去重） ============
 
-func TestLoadConfigList_SuccessPersonal(t *testing.T) {
+// TestLoadConfigList_BothOK_NoOverlap 个性化和公共都成功拉取、configCode 无重叠 → 合并后数量正确
+func TestLoadConfigList_BothOK_NoOverlap(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
-			return `
-- fileName: mylog.yml
+			if dataId == personalDataID {
+				return `
+- configCode: CODE_PERSONAL
+  fileName: personal_only.yml
   group: AGENT_GROUP
-  storePath: /var/log/
-  enableClean: true
+  storePath: /etc/personal/
 `, nil
+			}
+			if dataId == publicDataID {
+				return `
+- configCode: CODE_PUBLIC
+  fileName: public_only.yml
+  group: AGENT_GROUP
+  storePath: /etc/public/
+`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
 		},
 	}
 	cs := newTestConfigService(cc)
@@ -279,21 +343,125 @@ func TestLoadConfigList_SuccessPersonal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("预期成功，实际错误: %v", err)
 	}
-	if result.source != "personal" {
-		t.Errorf("source = %q, want personal", result.source)
+	if !result.personalOK {
+		t.Error("personalOK 应为 true")
 	}
-	if len(result.configs) != 1 {
-		t.Errorf("configs len = %d, want 1", len(result.configs))
+	if !result.publicOK {
+		t.Error("publicOK 应为 true")
 	}
-	if result.configs[0].FileName != "mylog.yml" {
-		t.Errorf("fileName = %q, want mylog.yml", result.configs[0].FileName)
+	if len(result.mergedConfigs) != 2 {
+		t.Errorf("mergedConfigs len = %d, want 2", len(result.mergedConfigs))
+	}
+	if len(result.mergedTargets) != 2 {
+		t.Errorf("mergedTargets len = %d, want 2", len(result.mergedTargets))
 	}
 }
 
-func TestLoadConfigList_PersonalFallbackToPublic(t *testing.T) {
+// TestLoadConfigList_BothOK_OverlapByConfigCode 个性化和公共都成功 + 同 configCode → 只保留个性化（优先级高）
+func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				// CODE_PERSONAL_ONLY 独有；CODE_SHARED 与公共重叠
+				return `
+- configCode: CODE_PERSONAL_ONLY
+  fileName: personal_only.yml
+  group: AGENT_GROUP
+  storePath: /etc/personal/
+- configCode: CODE_SHARED
+  fileName: overlap_from_personal.yml
+  group: AGENT_GROUP
+  storePath: /etc/personal/
+`, nil
+			}
+			if dataId == publicDataID {
+				// CODE_PUBLIC_ONLY 独有；CODE_SHARED 与个性化重叠
+				return `
+- configCode: CODE_PUBLIC_ONLY
+  fileName: public_only.yml
+  group: AGENT_GROUP
+  storePath: /etc/public/
+- configCode: CODE_SHARED
+  fileName: overlap_from_public.yml
+  group: AGENT_GROUP
+  storePath: /etc/public/
+`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("预期成功，实际错误: %v", err)
+	}
+	// CODE_PERSONAL_ONLY + CODE_PUBLIC_ONLY + CODE_SHARED(只保留个性化) = 3 个 MetricConfig
+	if len(result.mergedConfigs) != 3 {
+		t.Errorf("mergedConfigs len = %d, want 3", len(result.mergedConfigs))
+	}
+	// CODE_SHARED 应只出现一次，source="personal"
+	for _, cfg := range result.mergedConfigs {
+		if cfg.ConfigCode == "CODE_SHARED" {
+			if cfg.Source != "personal" {
+				t.Errorf("CODE_SHARED 的 Source 应为 personal，实际 = %q", cfg.Source)
+			}
+			if cfg.StorePath != "/etc/personal/" {
+				t.Errorf("CODE_SHARED 的 StorePath 应来自个性化 /etc/personal/，实际 = %q", cfg.StorePath)
+			}
+			if cfg.FileName != "overlap_from_personal.yml" {
+				t.Errorf("CODE_SHARED 的 FileName 应来自个性化 overlap_from_personal.yml，实际 = %q", cfg.FileName)
+			}
+		}
+	}
+	// 展开后 3 个 targetConfig
+	if len(result.mergedTargets) != 3 {
+		t.Errorf("mergedTargets len = %d, want 3", len(result.mergedTargets))
+	}
+}
+
+// TestLoadConfigList_PersonalOK_PublicFail 个性化成功 + 公共失败 → 只用个性化
+func TestLoadConfigList_PersonalOK_PublicFail(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				return `- configCode: CODE_LOG
+  fileName: mylog.yml
+  group: AGENT_GROUP
+  storePath: /var/log/
+  enableClean: true
+`, nil
+			}
+			if dataId == publicDataID {
+				return "", errors.New("public not found")
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("预期成功（只有个性化），实际错误: %v", err)
+	}
+	if !result.personalOK {
+		t.Error("personalOK 应为 true")
+	}
+	if result.publicOK {
+		t.Error("publicOK 应为 false")
+	}
+	if len(result.mergedTargets) != 1 {
+		t.Errorf("mergedTargets len = %d, want 1", len(result.mergedTargets))
+	}
+}
+
+// TestLoadConfigList_PersonalFail_PublicOK 个性化失败 + 公共成功 → 只用公共（两者都被尝试拉取）
+func TestLoadConfigList_PersonalFail_PublicOK(t *testing.T) {
 	callOrder := []string{}
-	// 个性化 dataId 末尾带 _agent-1，公共的不带
-	cs := newTestConfigService(nil)
 	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
 	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
 
@@ -305,7 +473,8 @@ func TestLoadConfigList_PersonalFallbackToPublic(t *testing.T) {
 			}
 			if dataId == publicDataID {
 				return `
-- fileName: app.conf
+- configCode: CODE_APP
+  fileName: app.conf
   group: AGENT_GROUP
   storePath: /etc/app/
 `, nil
@@ -313,19 +482,26 @@ func TestLoadConfigList_PersonalFallbackToPublic(t *testing.T) {
 			return "", errors.New("unexpected dataId: " + dataId)
 		},
 	}
-	cs.cc = cc
+	cs := newTestConfigService(cc)
 	result, err := cs.LoadConfigList()
 	if err != nil {
-		t.Fatalf("预期成功降级，实际错误: %v", err)
+		t.Fatalf("预期成功（只有公共），实际错误: %v", err)
 	}
-	if result.source != "public" {
-		t.Errorf("source = %q, want public", result.source)
+	if result.personalOK {
+		t.Error("personalOK 应为 false")
+	}
+	if !result.publicOK {
+		t.Error("publicOK 应为 true")
+	}
+	if len(result.mergedTargets) != 1 {
+		t.Errorf("mergedTargets len = %d, want 1", len(result.mergedTargets))
 	}
 	if len(callOrder) != 2 {
-		t.Errorf("应调用 2 次 GetConfig，实际 %d 次: %v", len(callOrder), callOrder)
+		t.Errorf("两者都应该尝试拉取，应调用 2 次 GetConfig，实际 %d 次: %v", len(callOrder), callOrder)
 	}
 }
 
+// TestLoadConfigList_AllFailed 两者都失败 → 返回 error
 func TestLoadConfigList_AllFailed(t *testing.T) {
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -339,54 +515,71 @@ func TestLoadConfigList_AllFailed(t *testing.T) {
 	}
 }
 
-func TestLoadConfigList_EmptyContentFallback(t *testing.T) {
-	cs := newTestConfigService(nil)
+// TestLoadConfigList_PersonalEmpty_PublicOK 个性化空内容 + 公共成功 → 只用公共
+func TestLoadConfigList_PersonalEmpty_PublicOK(t *testing.T) {
 	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
 			if dataId == personalDataID {
 				return "", nil // 空内容视为失败
 			}
-			return `- fileName: x
+			if dataId == publicDataID {
+				return `- configCode: CODE_X
+  fileName: x
   group: g
   storePath: /tmp/`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
 		},
 	}
-	cs.cc = cc
+	cs := newTestConfigService(cc)
 	result, err := cs.LoadConfigList()
 	if err != nil {
-		t.Fatalf("预期降级成功，实际错误: %v", err)
+		t.Fatalf("预期成功，实际错误: %v", err)
 	}
-	if result.source != "public" {
-		t.Errorf("source = %q, want public", result.source)
+	if result.personalOK {
+		t.Error("personalOK 应为 false（空内容）")
+	}
+	if !result.publicOK {
+		t.Error("publicOK 应为 true")
 	}
 }
 
-func TestLoadConfigList_EmptyArrayFallback(t *testing.T) {
-	cs := newTestConfigService(nil)
+// TestLoadConfigList_PersonalEmptyArray_PublicOK 个性化空数组 + 公共成功 → 只用公共
+func TestLoadConfigList_PersonalEmptyArray_PublicOK(t *testing.T) {
 	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
 			if dataId == personalDataID {
 				return "[]", nil // 空数组视为失败
 			}
-			return `- fileName: x
+			if dataId == publicDataID {
+				return `- configCode: CODE_X
+  fileName: x
   group: g
   storePath: /tmp/`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
 		},
 	}
-	cs.cc = cc
+	cs := newTestConfigService(cc)
 	result, err := cs.LoadConfigList()
 	if err != nil {
-		t.Fatalf("预期降级成功，实际错误: %v", err)
+		t.Fatalf("预期成功，实际错误: %v", err)
 	}
-	if result.source != "public" {
-		t.Errorf("source = %q, want public", result.source)
+	if result.personalOK {
+		t.Error("personalOK 应为 false（空数组）")
+	}
+	if !result.publicOK {
+		t.Error("publicOK 应为 true")
 	}
 }
 
+// TestLoadConfigList_InvalidYAML 两者都 YAML 无效 → 返回 error
 func TestLoadConfigList_InvalidYAML(t *testing.T) {
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -397,6 +590,169 @@ func TestLoadConfigList_InvalidYAML(t *testing.T) {
 	_, err := cs.LoadConfigList()
 	if err == nil {
 		t.Error("预期 YAML 解析错误，实际成功")
+	}
+}
+
+// TestLoadConfigList_PersonalInternalDedup 个性化内部有重复 configCode → 先配置先生效去重
+func TestLoadConfigList_PersonalInternalDedup(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				return `
+- configCode: DUP_CODE
+  fileName: dup_first.yml
+  group: AGENT_GROUP
+  storePath: /first/
+- configCode: DUP_CODE
+  fileName: dup_second.yml
+  group: AGENT_GROUP
+  storePath: /second/
+- configCode: UNIQUE_CODE
+  fileName: unique.yml
+  group: AGENT_GROUP
+  storePath: /unique/
+`, nil
+			}
+			if dataId == publicDataID {
+				return `[]`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// 3 条 MetricConfig 中 DUP_CODE 重复 → configCode 层去重后 2 个 mergedConfigs
+	if len(result.mergedConfigs) != 2 {
+		t.Errorf("mergedConfigs len = %d, want 2（DUP_CODE 去重）", len(result.mergedConfigs))
+	}
+	// 先配置先生效 → DUP_CODE 的 StorePath 应为 /first/
+	for _, cfg := range result.mergedConfigs {
+		if cfg.ConfigCode == "DUP_CODE" {
+			// mergedConfigs 里的 StorePath 还没 normalize（normalize 在 expand 阶段）
+			if cfg.StorePath != "/first/" {
+				t.Errorf("DUP_CODE 的 StorePath 应保留先配置的 /first/，实际 = %q", cfg.StorePath)
+			}
+			if cfg.FileName != "dup_first.yml" {
+				t.Errorf("DUP_CODE 的 FileName 应保留先配置的 dup_first.yml，实际 = %q", cfg.FileName)
+			}
+		}
+	}
+}
+
+// TestLoadConfigList_PublicInternalDedup 公共内部有重复 configCode → 先配置先生效去重
+func TestLoadConfigList_PublicInternalDedup(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				return "", errors.New("personal not found")
+			}
+			if dataId == publicDataID {
+				return `
+- configCode: DUP_CODE
+  fileName: dup_first.yml
+  group: AGENT_GROUP
+  storePath: /first/
+- configCode: DUP_CODE
+  fileName: dup_second.yml
+  group: AGENT_GROUP
+  storePath: /second/
+`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// 2 条 MetricConfig 中 DUP_CODE 重复 → configCode 层去重后 1 个
+	if len(result.mergedConfigs) != 1 {
+		t.Errorf("mergedConfigs len = %d, want 1", len(result.mergedConfigs))
+	}
+	if result.mergedConfigs[0].StorePath != "/first/" {
+		t.Errorf("DUP_CODE 的 StorePath 应保留先配置的 /first/，实际 = %q", result.mergedConfigs[0].StorePath)
+	}
+}
+
+// TestLoadConfigList_ConfigCodeEmpty 所有 configCode 都为空 → validate 阶段跳过全部条目
+func TestLoadConfigList_ConfigCodeEmpty(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				return `
+- fileName: yolo.yml
+  group: AGENT_GROUP
+  storePath: /etc/yolo/
+`, nil // configCode 缺失
+			}
+			if dataId == publicDataID {
+				return `
+- configCode: CODE_OK
+  fileName: ok.yml
+  group: AGENT_GROUP
+  storePath: /etc/ok/
+`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("预期成功，实际错误: %v", err)
+	}
+	// personalOK=true 但展开时那条没 configCode 被 validate 跳过；public 那条正常展开
+	if len(result.mergedTargets) != 1 {
+		t.Errorf("mergedTargets len = %d, want 1（无 configCode 的条目被跳过）", len(result.mergedTargets))
+	}
+}
+
+// TestLoadConfigList_ConfigCodeInvalidChars configCode 含非法字符 → 该条目被跳过
+func TestLoadConfigList_ConfigCodeInvalidChars(t *testing.T) {
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
+	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+
+	cc := &mockConfigCenter{
+		getConfigFunc: func(dataId, group string) (string, error) {
+			if dataId == personalDataID {
+				return `
+- configCode: "BAD CODE!"
+  fileName: bad.yml
+  group: AGENT_GROUP
+  storePath: /etc/bad/
+`, nil // 空格+感叹号，非法
+			}
+			if dataId == publicDataID {
+				return `
+- configCode: CODE_OK
+  fileName: ok.yml
+  group: AGENT_GROUP
+  storePath: /etc/ok/
+`, nil
+			}
+			return "", errors.New("unexpected: " + dataId)
+		},
+	}
+	cs := newTestConfigService(cc)
+	result, err := cs.LoadConfigList()
+	if err != nil {
+		t.Fatalf("预期成功，实际错误: %v", err)
+	}
+	if len(result.mergedTargets) != 1 {
+		t.Errorf("mergedTargets len = %d, want 1（非法 configCode 的条目被跳过）", len(result.mergedTargets))
 	}
 }
 

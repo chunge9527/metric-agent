@@ -75,6 +75,10 @@ const NacosRuntimeRetryInterval = 30
 // 对应 nacos-sdk-go ClientConfig.TimeoutMs 默认值
 const DefaultNacosTimeoutMs = 5000
 
+// DefaultNacosGroup Nacos 默认分组（Nacos SDK 内部 constant.DEFAULT_GROUP = "DEFAULT_GROUP"）
+// 当 yaml 中 nacos.group 未配置或为空时，回填此默认值
+const DefaultNacosGroup = "DEFAULT_GROUP"
+
 // NacosSearchPageSize Nacos配置分页查询默认每页条数
 const NacosSearchPageSize = 100
 
