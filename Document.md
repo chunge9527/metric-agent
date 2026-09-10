@@ -368,6 +368,119 @@ curl -X POST -H "Authentication: your-auth-key" \
 
 ---
 
+### 1.6 进程守护控制
+
+| 项目           | 说明                                           |
+| ------------ | -------------------------------------------- |
+| **Method**   | `GET`                                        |
+| **URL**      | `/api/v1/guardian`                           |
+| **鉴权**       | ❌ 跳过（与 `/health`、`/api/v1/exec` 同为免鉴权白名单）      |
+| **Query 参数** | `action`：`pause` / `resume` / `status`       |
+
+> 本接口仅在 `feature.enableGuardian=true`（默认 true）时可用；若守护服务未启用，所有 action 请求均返回 **HTTP 503**。
+
+#### 1.6.1 action=status（查询守护状态）
+
+**请求**：
+
+```
+GET /api/v1/guardian?action=status
+```
+
+**成功响应**（HTTP 200）：
+
+```json
+{
+  "status": {
+    "running": true,
+    "paused": false,
+    "interval_minutes": 1,
+    "last_action": "start",
+    "last_action_at": 1725897600
+  }
+}
+```
+
+| status 字段        | 类型     | 说明                                       |
+| ---------------- | ------ | ---------------------------------------- |
+| running          | bool   | 守护服务是否已启动（Start 后为 true，Stop 后为 false）       |
+| paused           | bool   | 是否暂停中（Pause 后为 true；暂停时协程仍存活但跳过巡检执行）           |
+| interval_minutes | int    | 巡检周期（分钟）                                 |
+| last_action      | string | 最近一次控制操作：`start` / `pause` / `resume` / `stop`（空字符串时省略） |
+| last_action_at   | int64  | 最近一次操作的 Unix 时间戳（秒）（0 时省略）             |
+
+#### 1.6.2 action=pause（暂停巡检）
+
+**请求**：
+
+```
+GET /api/v1/guardian?action=pause
+```
+
+**成功响应**（HTTP 200）：
+
+```json
+{
+  "success": true,
+  "status": {
+    "running": true,
+    "paused": true,
+    "interval_minutes": 1,
+    "last_action": "pause",
+    "last_action_at": 1725897600
+  }
+}
+```
+
+> 暂停后守护服务不再执行健康检查和拉起逻辑，直到收到 `resume` 指令。`paused=true` 表示协程仍存活但跳过巡检执行。
+
+#### 1.6.3 action=resume（恢复巡检）
+
+**请求**：
+
+```
+GET /api/v1/guardian?action=resume
+```
+
+**成功响应**（HTTP 200）：
+
+```json
+{
+  "success": true,
+  "status": {
+    "running": true,
+    "paused": false,
+    "interval_minutes": 1,
+    "last_action": "resume",
+    "last_action_at": 1725897600
+  }
+}
+```
+
+#### 1.6.4 错误响应
+
+| HTTP 状态 | 原因                                                     |
+| ------- | ------------------------------------------------------ |
+| 400     | `action` 值非法、守护服务未启动时执行 `pause/resume`（返回 `"守护服务未启动，无法暂停/恢复"`） |
+| 405     | 使用了非 GET 方法                                              |
+| 503     | 守护服务未启用（`feature.enableGuardian=false`）             |
+
+#### 1.6.5 cURL 示例
+
+```bash
+# 查询状态
+curl http://127.0.0.1:9092/api/v1/guardian?action=status
+
+# 暂停巡检
+curl http://127.0.0.1:9092/api/v1/guardian?action=pause
+
+# 恢复巡检
+curl http://127.0.0.1:9092/api/v1/guardian?action=resume
+```
+
+
+---
+
 ## 第二章 指令执行模式（CLI）
 
 ### 2.1 概述
@@ -470,26 +583,31 @@ metric-agent --help
 
 ## 附录：默认常量速查
 
-| 常量                         | 值                                  | 说明                 |
-| -------------------------- | ---------------------------------- | ------------------ |
-| DefaultBindAddr            | `0.0.0.0:9092`                     | HTTP 监听地址          |
-| DefaultConfigPath          | `./metricAgent.yml`               | 默认配置文件路径           |
-| DefaultLogPath             | `./logs/metricAgent.log`           | 默认日志路径             |
-| DefaultExecTimeout         | `60`                               | 命令执行默认超时（秒）        |
-| MaxExecTimeout             | `600`                              | 命令执行服务端最大超时（秒）     |
-| ClientMaxExecTimeout       | `1800`                             | 指令模式客户端超时上限（秒）     |
-| MaxRequestBodyBytes        | `10485760`                         | HTTP 请求体最大 10MB    |
-| MaxShellOutputBytes        | `1048576`                          | Shell 单流输出上限 1MB |
-| ShellLogPreviewBytes       | `5120`                             | Shell 日志预览截断 5KB  |
-| DefaultForwardTimeout      | `30`                               | 请求透传默认超时（秒）        |
-| MaxForwardTimeout          | `120`                              | 请求透传最大超时（秒）        |
-| DefaultPullIntervalMinutes | `10`                               | Nacos 配置定时拉取间隔（分钟） |
-| DefaultMaxUploadSize       | `104857600`                        | 单文件最大上传 100MB      |
-| BackupFileSuffix           | `_agent_bak`                       | 备份文件后缀             |
-| TempFilePrefix             | `.tmp_`                            | 原子写临时文件前缀          |
-| DefaultExecModeAESKey      | `7sK9p2R5zG8tB4vN`                 | 指令模式客户端硬编码 AES 密钥（16字节） |
-| GuardianCheckInterval      | `1`                                | 进程守护巡检周期（分钟）       |
-| GuardianFailThreshold      | `3`                                | 熔断连续失败阈值           |
-| GuardianFuseDuration       | `5`                                | 熔断周期（分钟）           |
-| LogMaxRetainDays           | `30`                               | 日志默认保留天数（DailyRotator 清理协程） |
+| 常量                             | 值                                      | 说明                                         |
+| ------------------------------ | -------------------------------------- | ------------------------------------------ |
+| DefaultBindAddr                | `0.0.0.0:9092`                         | HTTP 监听地址                                  |
+| DefaultConfigPath              | `./metricAgent.yml`                   | 默认配置文件路径                                   |
+| DefaultLogPath                 | `./logs/metricAgent.log`               | 默认日志路径                                     |
+| DefaultExecTimeout             | `60`                                   | 命令执行默认超时（秒）                                |
+| MaxExecTimeout                 | `600`                                  | 命令执行服务端最大超时（秒）                             |
+| ClientMaxExecTimeout           | `1800`                                 | 指令模式客户端超时上限（秒）                             |
+| DefaultReloadScriptTimeout     | `60`                                   | 配置重载脚本默认超时（秒）                              |
+| DefaultHealthCheckTimeout      | `60`                                   | 守护健康检查默认超时（秒）                              |
+| DefaultStartScriptTimeout      | `120`                                  | 守护启动脚本默认超时（秒）                              |
+| DefaultScheduleTimeout         | `30`                                   | 定时任务执行默认超时（秒）                              |
+| DefaultForwardTimeout          | `30`                                   | 请求透传默认超时（秒）                                |
+| MaxForwardTimeout              | `120`                                  | 请求透传最大超时（秒）                                |
+| DefaultPullIntervalMinutes     | `1`                                    | Nacos 配置定时拉取默认间隔（分钟）                     |
+| DefaultMaxUploadSize           | `104857600`                            | 单文件最大上传 100MB                              |
+| MaxRequestBodyBytes            | `10485760`                             | HTTP 请求体最大 10MB                            |
+| MaxShellOutputBytes            | `1048576`                              | Shell 单流输出上限 1MB                          |
+| ShellLogPreviewBytes           | `5120`                                 | Shell 日志预览截断 5KB                           |
+| BackupFileSuffix               | `_agent_bak`                           | 备份文件后缀                                     |
+| DefaultExecModeAESKey          | `7sK9p2R5zG8tB4vN`                     | 指令模式客户端硬编码 AES 密钥（16字节）                    |
+| DefaultNacosGroup              | `DEFAULT_GROUP`                        | Nacos 默认分组（yaml 未配置时回填）                      |
+| DefaultNacosTimeoutMs          | `5000`                                 | Nacos 单次 HTTP/gRPC 请求超时（毫秒）                  |
+| LogMaxSizeMB                   | `100`                                  | 单日志文件最大 100MB                            |
+| LogMaxRetainDays               | `30`                                   | 日志默认保留 30 天（DailyRotator 清理协程）              |
+| LogRotateFilePattern           | `%s-%s-%d.log`                         | 轮转文件命名模板（前缀-yyyy-MM-dd-序号.log）          |
+| AppVersion                     | `"0.0.1"`                              | 应用版本号（构建时可通过 -ldflags 注入）                  |
 

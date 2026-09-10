@@ -8,32 +8,29 @@ agent:
   
 # 服务特性总开关，true启用，false禁用，未配置时默认全部false）
 feature:
-  # Nacos配置中心和配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
+  # Nacos配置中心、配置清单拉取、二级配置分发、配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
   enableNacos: true
-  # 进程守护服务(guardianSvc)开关，关闭不启动进程守护、不加载crontab.yaml
+  # 进程守护服务开关，关闭不启动进程守护、不加载crontab.yml
   enableGuardian: false
-  # 定时任务调度服务(scheduleSvc)开关，关闭不加载scheduledConfig.yaml、不运行定时任务
+  # 定时任务调度服务开关，关闭不加载scheduledConfig.yml、不运行定时任务
   enableSchedule: false
   
 # Nacos 配置中心连接信息
 nacos:
   # Nacos 服务地址
   address: http://192.168.16.177:8848
-  # 命名空间id（默认public）
-  namespace: ""    # public命名空间id就是空字符串
-  # 分组（默认DEFAULT_GROUP）
+  # 命名空间id（public命名空间id就是空字符串）
+  namespace: ""
+  # 分组
   group: DEFAULT_GROUP
-  # 鉴权账号密码（Nacos控制台创建的账号，只读权限最佳）
+  # 鉴权账号密码（管理员账号才有读取多GROUP的权限）
   username: user_nacos
   password: Nacos,2026
 
-  # 可选参数
   # 单次 Nacos http/gRPC 请求超时时间，单位（毫秒）
   timeout: 5000
   # 是否在启动时不加载配置缓存，默认true
   notLoadCacheAtStart: true
-
- 
 
 # Shell 远程命令加密配置
 shell:
@@ -45,15 +42,18 @@ shell:
 
 # 配置清单拉取、二级配置分发、配置清理配置
 config:
-  pullInterval: 1  # 小于0默认为1，单位分钟
+  # 小于0默认为1，单位分钟
+  pullInterval: 1  
+  # 配置清理相关配置
   cleanOrphanFile:
-    # 是否开启配置对齐，默认false关闭，防止误删  
+    # 是否开启配置清理，默认false关闭
+    # 配置清理只对按group批量拉取配置有效
     enable: true 
-    # 定点执行清理时间配置，2代表2点执行，可配置多个时间点，自动清理配置重复的时间点
+    # 定点执行清理时间配置，2代表2点执行，可配置多个时间点
     # 只支持大于0小于23的正整数，不符合要求的直接过滤
-    # 必填，若无有效配置不执行配置清理逻辑        
+    # 必填，若无有效配置不执行配置清理    
     cleanFixHour: [0,1,10]   
-    # 需要清理的文件后缀，排除空字符串，必填，不配置不执行配置清理逻辑，也不执行按group拉取配置
+    # 需要清理的文件后缀，排除空字符串，必填，不配置不执行配置清理
     cleanSuffix: [".yml",".yaml"]      
   # 配置重载脚本超时（秒）
   reloadScript:

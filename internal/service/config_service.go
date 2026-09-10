@@ -254,6 +254,8 @@ func mergeMetricConfigLists(personal, public model.MetricConfigList) model.Metri
 	for i := range public {
 		cfg := &public[i]
 		if seen[cfg.ConfigCode] {
+			logger.Warn("配置项 configCode 重复，个性化配置先生效，跳过",
+				"configCode", cfg.ConfigCode)
 			continue // 被个性化覆盖，跳过
 		}
 		out = append(out, *cfg)
@@ -648,13 +650,25 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	mu.Lock()
 	defer mu.Unlock()
 
+	finalPath := t.storePath + t.finalName
 	if newContent == "" {
-		logger.Warn("监听回调：配置内容为空，跳过写入",
-			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
+		if filekit.PathExists(finalPath) {
+			if err := os.Remove(finalPath); err != nil {
+				logger.Error("监听回调：配置内容为空，删除本地文件失败",
+					"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+					"storePath", t.storePath, "path", finalPath, "error", err)
+			} else {
+				logger.Info("监听回调：配置内容为空，已删除本地文件",
+					"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+					"storePath", t.storePath, "path", finalPath)
+			}
+		} else {
+			logger.Info("监听回调：配置内容为空，本地文件不存在，无需删除",
+				"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+				"storePath", t.storePath, "path", finalPath)
+		}
 		return
 	}
-
-	finalPath := t.storePath + t.finalName
 	if err := s.writeConfig(t, newContent, finalPath); err != nil {
 		logger.Error("监听回调：配置处理失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
@@ -822,12 +836,6 @@ func (s *ConfigService) distributeClean(result *configListResult, cleanStorePath
 	}
 	if len(s.cleanFixHours) == 0 {
 		logger.Warn("cleanFixHour 无有效配置，不执行配置清理",
-			"personal_dataId", personalDataID, "public_dataId", publicDataID)
-		return
-	}
-	// 本轮没有任何配置项 enableClean=true
-	if len(cleanStorePaths) == 0 {
-		logger.Info("本轮没有任何配置项 enableClean=true",
 			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}

@@ -93,7 +93,7 @@
 | 项目    | 要求                                            |
 | ----- | --------------------------------------------- |
 | 操作系统  | Linux (glibc 2.17+) / Windows 10+ / macOS 11+ |
-| Go 版本 | 1.23+（仅编译时需要）                                 |
+| Go 版本 | 1.25+（仅编译时需要）                                |
 | Nacos | 2.x（配置中心服务端）                                  |
 | 网络    | Agent 需能访问 Nacos 服务端（默认 8848）                 |
 | 磁盘    | 日志目录 >= 100MB，配置存储目录 >= 50MB                  |
@@ -134,7 +134,7 @@ cd metric-agent
 
 ### 4. 主配置
 
-编辑 `metricAgent.yml`（修改 agent.id、agent.group、nacos.address、auth.key 等）：
+编辑 `metricAgent.yml`（修改 agent.id、nacos.address、nacos.group、auth.key 等）：
 
 ```yaml
 # MetricAgent 基础配置文件
@@ -143,53 +143,61 @@ cd metric-agent
 
 agent:
   # 节点唯一标识，必填，仅允许字母、数字、下划线、横线
+  # agent.group 会自动从 nacos.group 回填，无需单独配置
   id: node-001
-  # 节点分组
-  group: k8s
   
-# 服务特性总开关，true启用，false禁用，保持向后兼容（未配置时默认全部true）
+# 服务特性总开关，true启用，false禁用；未配置时默认全部true
 feature:
   # Nacos配置中心和配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
   enableNacos: true
-  # 进程守护服务(guardianSvc)开关，关闭不启动进程守护、不加载crontab.yml
+  # 进程守护服务开关，关闭不启动进程守护、不加载crontab.yml
   enableGuardian: false
-  # 定时任务调度服务(scheduleSvc)开关，关闭不加载scheduledConfig.yml、不运行定时任务
+  # 定时任务调度服务开关，关闭不加载scheduledConfig.yml、不运行定时任务
   enableSchedule: false
   
 # Nacos 配置中心连接信息
 nacos:
   # Nacos 服务地址
   address: http://192.168.50.177:8848
-  # 命名空间（默认public）
+  # 命名空间（public 填空字符串或 "public"）
   namespace: public
-  # 分组（默认DEFAULT_GROUP）
+  # 分组（默认 DEFAULT_GROUP）；同时回填为 agent.group
   group: DEFAULT_GROUP
-  # 鉴权账号密码（Nacos控制台创建的账号，只读权限最佳）
+  # 鉴权账号密码（Nacos 控制台创建的账号，只读权限最佳）
   username: your_user
   password: pwd
 
   # 可选参数
-  # 单次 Nacos http/gRPC 请求超时时间，单位毫秒
+  # 单次 Nacos http/gRPC 请求超时时间，单位毫秒（默认 5000ms）
   timeout: 5000
-  # 是否在启动时不加载配置缓存，默认true
+  # 是否在启动时不加载配置缓存，默认 true
   notLoadCacheAtStart: true
 
-  # 配置主动拉取配置时间间隔，单位分钟
+# 配置清单拉取、二级配置分发、配置清理
+config:
+  # 主动拉取间隔（分钟）；<0 时默认 1 分钟
   pullInterval: 1
-
+  # 孤儿配置文件清理（PRD 3.2.4）
+  cleanOrphanFile:
+    # 是否开启配置清理，默认 false
+    # 仅对按 group 批量拉取的配置生效
+    enable: false
+    # 定点执行清理时间（小时），支持多个时间点，1~23 有效
+    cleanFixHour: [0, 2]
+    # 需要清理的文件后缀（必填），默认 [".yml", ".yaml"]
+    cleanSuffix: [".yml", ".yaml"]
+  # 配置重载脚本超时（秒）
+  reloadScript:
+    timeout: 60
 
 # Shell 远程命令加密配置
 shell:
   encrypt:
     # AES-128加密密钥（16字节），用于远程命令请求/响应加密
     # 不建议修改默认值，会导致命令行模式无法正常工作
-    # 不要修改长度，否则JAVA测加密会比较麻烦
-    key: "16字节的密钥"
+    # 不要修改长度，否则 JAVA 侧加密会比较麻烦
+    key: "7sK9p2R5zG8tB4vN"
 
-# 配置重载脚本超时（秒）
-config:
-  reloadScript:
-    timeout: 60
 # 进程守护超时配置
 crontab:
   # 守护巡检时间间隔（分钟）
@@ -200,9 +208,11 @@ crontab:
   startScript:
     # 启动脚本超时（秒）
     timeout: 120
+
 # 请求透传默认超时（秒）
 forward:
   timeout: 30
+
 # VictoriaMetrics 监控组件配置
 victoriaMetrics:
   # VictoriaMetrics 查询地址
@@ -211,11 +221,31 @@ victoriaMetrics:
   headers:
     - key: Authorization
       value: value
+
+# 文件上传配置
+upload:
+  # 单文件最大上传大小（字节），默认 100MB
+  maxFileSize: 104857600
+  # 敏感目录黑名单（可选），命中即拒绝上传；未配置时使用内置默认列表
+  # sensitivePaths:
+  #   - /etc
+  #   - /root
+  #   - C:\windows
+
 # HTTP 接口鉴权配置
 auth:
   # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION
   # 生产禁止硬编码，优先环境变量注入
   key: ""
+
+# 日志配置
+log:
+  # 日志级别：debug / info / warn / error，默认 info
+  level: info
+  # 单个日志文件最大大小，单位 MB，默认 100
+  maxFileSize: 100
+  # 日志最大保留天数，默认 30（DailyRotator 按天轮转）
+  maxRetainDays: 30
 ```
 
 
@@ -401,10 +431,11 @@ nohup ./metric-agent --config ./metricAgent.yml --bind-addr 0.0.0.0:9092 \
   output:
     path: /var/log/metric-agent/data/cpu_usage.json   # 结果输出文件路径
     maxFile: 100                  # MB，超出自动滚动
+    writeMode: append             # 写入模式：append（默认追加）或 overwrite（覆盖）
 ```
 **说明**：
 
-1. 暂不支持scheduledConfig.yml动态更新，需要重启agent
+1. 暂不支持 scheduledConfig.yml 动态更新，需要重启 agent
 
 ### Nacos 配置清单
 
@@ -417,10 +448,20 @@ Agent 从 Nacos 拉取配置清单 dataId：
 在 Nacos 上创建 dataId，YAML 格式示例：
 
 ```yaml
-- fileName: vmagent.yaml                     # Nacos 上的 dataId（必填）
+# 按 fileName 指定拉取单个配置
+- configCode: vmagent_config                  # 配置项编号（可选），用于去重和优先级判定
+  fileName: vmagent.yaml                     # Nacos 上的 dataId；为空时按 group 拉取全部配置
+  group: VICTORIAMETRICS                    # Nacos 配置分组
   storePath: /etc/victoriametrics            # 本地存储目录（必填）
   reFileName: vmagent-production.yaml        # 重命名（可选）
+  fileMode: "0755"                           # 落地文件权限（八进制字符串，默认 "0755"）
   reloadScript: "systemctl reload vmagent"   # 变更后执行的重载脚本（可选）
+  enableClean: false                         # 是否参与配置清理对齐（可选）
+
+# 按 group 批量拉取（fileName 为空时生效）
+- configCode: batch_config
+  group: VICTORIAMETRICS
+  storePath: /opt/vmagent/etc
 ```
 
 
@@ -528,6 +569,7 @@ GET /health
 {
     "status": "ok",
     "agent_id": "node-001",
+    "agent_group": "DEFAULT_GROUP",
     "timestamp": 1700000000
 }
 ```
@@ -644,6 +686,48 @@ multipart 字段：
 
 **覆盖逻辑**：存在原文件时先重命名为 `_agent_bak`（单版本备份），再写入新文件。
 
+### 5. 进程守护控制
+
+```
+GET /api/v1/guardian?action=status|pause|resume
+```
+
+| 项目 | 说明                                 |
+| -- | ---------------------------------- |
+| 鉴权 | ❌ 跳过（与 /health、/api/v1/exec 同为免鉴权白名单） |
+| 方法 | 仅 GET |
+
+| action  | 说明                                     |
+| ------- | -------------------------------------- |
+| status  | 查询守护服务当前状态（running/paused/last_action） |
+| pause   | 暂停巡检（守护服务停止健康检查和拉起逻辑，协程仍存活）       |
+| resume  | 恢复巡检                                   |
+
+成功响应（action=status）：
+
+```json
+{
+  "status": {
+    "running": true,
+    "paused": false,
+    "interval_minutes": 1,
+    "last_action": "start",
+    "last_action_at": 1725897600
+  }
+}
+```
+
+成功响应（action=pause/resume）：
+
+```json
+{
+  "success": true,
+  "status": { /* GuardianStatus 完整对象 */ }
+}
+```
+
+> 若 `feature.enableGuardian=false`，所有 action 返回 HTTP 503。
+
 ## 管理脚本
 
 `deploy/start.sh` 提供一站式管理能力：
@@ -668,7 +752,7 @@ multipart 字段：
 1. 确认 Nacos 服务正常运行：`curl http://<nacos>:8848/nacos`
 2. 检查 `metricAgent.yml` 中 `nacos.address` 配置
 3. 确认 `feature.enableNacos: true`（默认）
-4. Agent 启动后会按 `pullInterval` 分钟定期重试，日志中可见重连状态
+4. Agent 启动后会按 `config.pullInterval` 分钟定期重试，日志中可见重连状态
 
 ### Q2: 配置分发失败怎么办？
 
@@ -692,7 +776,7 @@ multipart 字段：
 
 ### Q5: 指令执行模式请求解密失败？
 
-1. 确认 `metricAgent.yml` 中 `shell.encrypt.key` 与客户端默认密钥 `7sK9p2R5zG8tB4vN1qX6dF3hJ7cM0aS2` 一致
+1. 确认 `metricAgent.yml` 中 `shell.encrypt.key` 与客户端默认密钥 `7sK9p2R5zG8tB4vN`（16字节）一致
 2. 服务端启动日志会提示密钥一致性状态
 3. 如果修改了 YAML 中的 key，需同步修改客户端常量 `DefaultExecModeAESKey`
 
@@ -728,11 +812,12 @@ curl -H "Authentication: <auth-key>" http://127.0.0.1:9092/health
 
 ### Q8: 日志轮转策略？
 
-* 单文件最大：100MB
-
-* 保留历史：5 个文件
-
-* 日志路径：`./logs/metricAgent.log`（相对于二进制目录）
+* **轮转方式**：自研 DailyRotator，按本地时区午夜自动轮转
+* **轮转文件命名**：`metricAgent-{yyyy-MM-dd}-{序号}.log`（如 `metricAgent-2026-09-10-0.log`）
+* **单文件最大**：100MB（可通过 `log.maxFileSize` 配置）
+* **保留天数**：30 天（可通过 `log.maxRetainDays` 配置），由后台清理协程每日扫描删除过期文件
+* **日志级别**：支持 debug / info / warn / error（通过 `log.level` 配置）
+* **日志路径**：默认 `./logs/metricAgent.log`（相对于二进制目录），可通过 `--logs` 参数指定
 
 ### Q9: 备份机制说明？
 
@@ -755,8 +840,7 @@ metric-agent/
 │   ├── metricAgent.yml         # 主配置文件（部署时修改）
 │   ├── crontab.yml             # 进程守护配置
 │   ├── scheduledConfig.yml     # 定时任务配置
-│   ├── metricFileConfig.yml    # 公共配置清单示例
-│   └── metricFileConfig-node-001.yaml  # 个性化配置清单示例
+│   └── metricFileConfig_group.yml  # Nacos 公共配置清单示例
 ├── internal/
 │   ├── bootstrap/               # 启动引导
 │   │   ├── bootstrap.go         # BootstrapPath 路径解析
