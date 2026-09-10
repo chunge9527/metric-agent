@@ -13,5 +13,5 @@
 - componentName: vmagent
   ips:
     - "10.0.0.100"
-  healthCheckScript: "pgrep -f vmagent > /dev/null && exit 0 || exit 1"
-  startScript: "systemctl start vmagent"
+  healthCheckScript: "pgrep -f vmagent"
+  startScript: "/cib/ctmp/services/vm_cluster/start_vmagent.sh start"
