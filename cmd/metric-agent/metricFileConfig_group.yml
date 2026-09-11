@@ -4,6 +4,8 @@
   fileName:
   # nacos group
   group: k8s
+  # suffix
+  suffix: .yaml
   # 配置存储路径
   storePath: /home/cib/agent/config
   # 是否对storePath执行配置清理，默认false关闭
