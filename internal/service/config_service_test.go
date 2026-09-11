@@ -93,30 +93,46 @@ func TestNormalizeStorePath(t *testing.T) {
 
 func TestFinalNameOf(t *testing.T) {
 	tests := []struct {
-		dataId, reFileName, want string
+		dataId, reFileName, suffix, want string
 	}{
 		// reFileName 优先
-		{"app.log.yml", "custom.conf", "custom.conf"},
-		{"app.log", "renamed.log", "renamed.log"},
-		// dataId 命中已知后缀 → 直接用 dataId
-		{"app.log.yml", "", "app.log.yml"},
-		{"config.yml", "", "config.yml"},
-		{"rules.json", "", "rules.json"},
-		{"settings.xml", "", "settings.xml"},
-		{"page.html", "", "page.html"},
-		{"data.properties", "", "data.properties"},
-		{"notes.txt", "", "notes.txt"},
-		// 未命中 → 补 .yml
-		{"myconfig", "", "myconfig.yml"},
-		{"agent_v2", "", "agent_v2.yml"},
-		// 大小写
-		{"CONFIG.YML", "", "CONFIG.YML"},
-		{"Config.YAML", "", "Config.YAML"},
+		{"app.log", "custom.conf", ".yml", "custom.conf"},
+		{"app.log", "renamed.log", ".yml", "renamed.log"},
+		// reFileName 为空 → dataId + suffix
+		{"myconfig", "", ".yml", "myconfig.yml"},
+		{"agent_v2", "", ".yml", "agent_v2.yml"},
+		{"app.log", "", ".conf", "app.log.conf"},
+		{"rules", "", ".json", "rules.json"},
+		// suffix 为空 → 直接用 dataId
+		{"data", "", "", "data"},
 	}
 	for _, tc := range tests {
-		got := finalNameOf(tc.dataId, tc.reFileName)
+		got := finalNameOf(tc.dataId, tc.reFileName, tc.suffix)
 		if got != tc.want {
-			t.Errorf("finalNameOf(%q, %q) = %q, want %q", tc.dataId, tc.reFileName, got, tc.want)
+			t.Errorf("finalNameOf(%q, %q, %q) = %q, want %q", tc.dataId, tc.reFileName, tc.suffix, got, tc.want)
+		}
+	}
+}
+
+// ============ normalizeSuffix ============
+
+func TestNormalizeSuffix(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"空字符串返回空", "", ""},
+		{"纯空白返回空", "   ", ""},
+		{"已有前导点不变", ".conf", ".conf"},
+		{"无前导点自动补齐", "yml", ".yml"},
+		{"去空白后补点", "  json  ", ".json"},
+		{"已有后缀内容不变", ".yaml", ".yaml"},
+	}
+	for _, tc := range tests {
+		got := normalizeSuffix(tc.input)
+		if got != tc.want {
+			t.Errorf("normalizeSuffix(%q) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
@@ -251,61 +267,61 @@ func TestBuildFinalNameSets(t *testing.T) {
 	}
 }
 
-// ============ itemKey（PRD L189） ============
+// ============ itemKey（PRD 3.2.3） ============
 
 func TestItemKey(t *testing.T) {
-	// PRD：md5(namespace + '#' + group + '#' + dataId + '#' + storePath + '#' + reFileName)
-	// 分隔符是单 #，configCode 不参与 itemKey 生成
+	// PRD：md5(namespace + '#' + group + '#' + dataId + '#' + suffix + '#' + storePath + '#' + fileModeStr + '#' + reloadScript + '#' + reFileName)
+	// 分隔符是单 #，configCode、enableClean 不参与 itemKey 生成
+	// itemKeyOf 签名：(ns, group, dataId, suffix, storePath, fileModeStr, reloadScript, reFileName string)
+
+	// 基本字段参与 itemKey 生成
 	tc := &targetConfig{
-		namespace:  "ns1",
-		group:      "g1",
-		dataId:     "d1",
-		storePath:  "/a/",
-		reFileName: "renamed",
+		namespace:    "ns1",
+		group:        "g1",
+		dataId:       "d1",
+		suffix:       ".yml",
+		storePath:    "/a/",
+		reFileName:   "renamed",
+		reloadScript: "echo hi",
+		fileModeStr:  "0644",
+		enableClean:  true,
 	}
-	tc.itemKey_ = itemKeyOf(tc.namespace, tc.group, tc.dataId, tc.storePath, tc.reFileName)
-	want := itemKeyOf("ns1", "g1", "d1", "/a/", "renamed")
+	tc.itemKey_ = itemKeyOf(tc.namespace, tc.group, tc.dataId, tc.suffix, tc.storePath, tc.fileModeStr, tc.reloadScript, tc.reFileName)
+	want := itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "0644", "echo hi", "renamed")
 	got := tc.itemKey()
 	if got != want {
 		t.Errorf("itemKey = %q, want %q", got, want)
 	}
 
-	// reFileName 为空也要拼接
+	// suffix 不同 → itemKey 不同
 	tc2 := &targetConfig{
-		namespace: "ns1",
-		group:     "g1",
-		dataId:    "d1",
-		storePath: "/a/",
+		namespace: "ns1", group: "g1", dataId: "d1", suffix: ".json",
+		storePath: "/a/", reFileName: "",
 	}
-	tc2.itemKey_ = itemKeyOf(tc2.namespace, tc2.group, tc2.dataId, tc2.storePath, tc2.reFileName)
-	want2 := itemKeyOf("ns1", "g1", "d1", "/a/", "")
-	got2 := tc2.itemKey()
-	if got2 != want2 {
-		t.Errorf("itemKey(reFileName空) = %q, want %q", got2, want2)
+	tc2.itemKey_ = itemKeyOf(tc2.namespace, tc2.group, tc2.dataId, tc2.suffix, tc2.storePath, tc2.fileModeStr, tc2.reloadScript, tc2.reFileName)
+	if itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "", "") == tc2.itemKey() {
+		t.Error("suffix 不同 → itemKey 应不同")
 	}
 
-	// storePath 不同 → itemKey 不同
-	tc3 := &targetConfig{
-		namespace: "ns1",
-		group:     "g1",
-		dataId:    "d1",
-		storePath: "/b/",
+	// reloadScript 不同 → itemKey 不同
+	if itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "reload_a", "") == itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "reload_b", "") {
+		t.Error("reloadScript 不同 → itemKey 应不同")
 	}
-	tc3.itemKey_ = itemKeyOf(tc3.namespace, tc3.group, tc3.dataId, tc3.storePath, tc3.reFileName)
-	if tc2.itemKey() == tc3.itemKey() {
-		t.Error("不同 storePath → itemKey 应不同")
+
+	// fileModeStr 不同 → itemKey 不同
+	if itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "0644", "", "") == itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "0755", "", "") {
+		t.Error("fileModeStr 不同 → itemKey 应不同")
+	}
+
+	// enableClean 不参与 itemKey → 不同 enableClean 但其他字段相同 → itemKey 相同
+	if itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "", "") != itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "", "") {
+		t.Error("enableClean 不参与 itemKey → 即使 enableClean 不同也应相同")
 	}
 
 	// configCode 不同但其他字段完全一样 → itemKey 相同（configCode 不参与）
-	tc2.configCode = "CODE_A"
-	tc3.storePath = tc2.storePath
-	tc3.group = tc2.group
-	tc3.namespace = tc2.namespace
-	tc3.dataId = tc2.dataId
-	tc3.configCode = "CODE_B"
-	// tc3 改了 storePath 后需重算 itemKey_（虽然我们在验证 configCode 不参与，这里保持两个对象 itemKey_ 一致来断言）
-	tc3.itemKey_ = tc2.itemKey_
-	if tc2.itemKey() != tc3.itemKey() {
+	k1 := itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "", "")
+	k2 := itemKeyOf("ns1", "g1", "d1", ".yml", "/a/", "", "", "")
+	if k1 != k2 {
 		t.Error("仅 configCode 不同 → itemKey 应相同（configCode 不参与生成）")
 	}
 }
@@ -322,7 +338,7 @@ func TestLoadConfigList_BothOK_NoOverlap(t *testing.T) {
 			if dataId == personalDataID {
 				return `
 - configCode: CODE_PERSONAL
-  fileName: personal_only.yml
+  dataId: personal_only.yml
   group: AGENT_GROUP
   storePath: /etc/personal/
 `, nil
@@ -330,7 +346,7 @@ func TestLoadConfigList_BothOK_NoOverlap(t *testing.T) {
 			if dataId == publicDataID {
 				return `
 - configCode: CODE_PUBLIC
-  fileName: public_only.yml
+  dataId: public_only.yml
   group: AGENT_GROUP
   storePath: /etc/public/
 `, nil
@@ -368,11 +384,11 @@ func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
 				// CODE_PERSONAL_ONLY 独有；CODE_SHARED 与公共重叠
 				return `
 - configCode: CODE_PERSONAL_ONLY
-  fileName: personal_only.yml
+  dataId: personal_only.yml
   group: AGENT_GROUP
   storePath: /etc/personal/
 - configCode: CODE_SHARED
-  fileName: overlap_from_personal.yml
+  dataId: overlap_from_personal.yml
   group: AGENT_GROUP
   storePath: /etc/personal/
 `, nil
@@ -381,11 +397,11 @@ func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
 				// CODE_PUBLIC_ONLY 独有；CODE_SHARED 与个性化重叠
 				return `
 - configCode: CODE_PUBLIC_ONLY
-  fileName: public_only.yml
+  dataId: public_only.yml
   group: AGENT_GROUP
   storePath: /etc/public/
 - configCode: CODE_SHARED
-  fileName: overlap_from_public.yml
+  dataId: overlap_from_public.yml
   group: AGENT_GROUP
   storePath: /etc/public/
 `, nil
@@ -411,8 +427,8 @@ func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
 			if cfg.StorePath != "/etc/personal/" {
 				t.Errorf("CODE_SHARED 的 StorePath 应来自个性化 /etc/personal/，实际 = %q", cfg.StorePath)
 			}
-			if cfg.FileName != "overlap_from_personal.yml" {
-				t.Errorf("CODE_SHARED 的 FileName 应来自个性化 overlap_from_personal.yml，实际 = %q", cfg.FileName)
+			if cfg.DataId != "overlap_from_personal.yml" {
+				t.Errorf("CODE_SHARED 的 DataId 应来自个性化 overlap_from_personal.yml，实际 = %q", cfg.DataId)
 			}
 		}
 	}
@@ -431,7 +447,7 @@ func TestLoadConfigList_PersonalOK_PublicFail(t *testing.T) {
 		getConfigFunc: func(dataId, group string) (string, error) {
 			if dataId == personalDataID {
 				return `- configCode: CODE_LOG
-  fileName: mylog.yml
+  dataId: mylog.yml
   group: AGENT_GROUP
   storePath: /var/log/
   enableClean: true
@@ -474,7 +490,7 @@ func TestLoadConfigList_PersonalFail_PublicOK(t *testing.T) {
 			if dataId == publicDataID {
 				return `
 - configCode: CODE_APP
-  fileName: app.conf
+  dataId: app.conf
   group: AGENT_GROUP
   storePath: /etc/app/
 `, nil
@@ -527,7 +543,7 @@ func TestLoadConfigList_PersonalEmpty_PublicOK(t *testing.T) {
 			}
 			if dataId == publicDataID {
 				return `- configCode: CODE_X
-  fileName: x
+  dataId: x
   group: g
   storePath: /tmp/`, nil
 			}
@@ -559,7 +575,7 @@ func TestLoadConfigList_PersonalEmptyArray_PublicOK(t *testing.T) {
 			}
 			if dataId == publicDataID {
 				return `- configCode: CODE_X
-  fileName: x
+  dataId: x
   group: g
   storePath: /tmp/`, nil
 			}
@@ -603,15 +619,15 @@ func TestLoadConfigList_PersonalInternalDedup(t *testing.T) {
 			if dataId == personalDataID {
 				return `
 - configCode: DUP_CODE
-  fileName: dup_first.yml
+  dataId: dup_first.yml
   group: AGENT_GROUP
   storePath: /first/
 - configCode: DUP_CODE
-  fileName: dup_second.yml
+  dataId: dup_second.yml
   group: AGENT_GROUP
   storePath: /second/
 - configCode: UNIQUE_CODE
-  fileName: unique.yml
+  dataId: unique.yml
   group: AGENT_GROUP
   storePath: /unique/
 `, nil
@@ -638,8 +654,8 @@ func TestLoadConfigList_PersonalInternalDedup(t *testing.T) {
 			if cfg.StorePath != "/first/" {
 				t.Errorf("DUP_CODE 的 StorePath 应保留先配置的 /first/，实际 = %q", cfg.StorePath)
 			}
-			if cfg.FileName != "dup_first.yml" {
-				t.Errorf("DUP_CODE 的 FileName 应保留先配置的 dup_first.yml，实际 = %q", cfg.FileName)
+			if cfg.DataId != "dup_first.yml" {
+				t.Errorf("DUP_CODE 的 DataId 应保留先配置的 dup_first.yml，实际 = %q", cfg.DataId)
 			}
 		}
 	}
@@ -658,11 +674,11 @@ func TestLoadConfigList_PublicInternalDedup(t *testing.T) {
 			if dataId == publicDataID {
 				return `
 - configCode: DUP_CODE
-  fileName: dup_first.yml
+  dataId: dup_first.yml
   group: AGENT_GROUP
   storePath: /first/
 - configCode: DUP_CODE
-  fileName: dup_second.yml
+  dataId: dup_second.yml
   group: AGENT_GROUP
   storePath: /second/
 `, nil
@@ -701,7 +717,7 @@ func TestLoadConfigList_ConfigCodeEmpty(t *testing.T) {
 			if dataId == publicDataID {
 				return `
 - configCode: CODE_OK
-  fileName: ok.yml
+  dataId: ok.yml
   group: AGENT_GROUP
   storePath: /etc/ok/
 `, nil
@@ -730,7 +746,7 @@ func TestLoadConfigList_ConfigCodeInvalidChars(t *testing.T) {
 			if dataId == personalDataID {
 				return `
 - configCode: "BAD CODE!"
-  fileName: bad.yml
+  dataId: bad.yml
   group: AGENT_GROUP
   storePath: /etc/bad/
 `, nil // 空格+感叹号，非法
@@ -738,7 +754,7 @@ func TestLoadConfigList_ConfigCodeInvalidChars(t *testing.T) {
 			if dataId == publicDataID {
 				return `
 - configCode: CODE_OK
-  fileName: ok.yml
+  dataId: ok.yml
   group: AGENT_GROUP
   storePath: /etc/ok/
 `, nil

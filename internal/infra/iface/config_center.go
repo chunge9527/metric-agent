@@ -11,7 +11,7 @@ type ConfigCenter interface {
 	// 返回: 配置内容字符串，或错误
 	GetConfig(dataId, group string) (string, error)
 
-	// SearchConfig 按分组分页查询配置列表（fileName 为空时用于拉取该分组下全部配置）
+	// SearchConfig 按分组分页查询配置列表（DataId 为空时用于拉取该分组下全部配置）
 	// group: 目标分组
 	// pageNo/pageSize: 分页参数（从1开始）
 	// 返回: 本页结果（含总条数），或错误

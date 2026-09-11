@@ -6,8 +6,8 @@ import (
 )
 
 // ListenRegistryItem 本地监听注册表单条记录（PRD 3.2.3）
-// ItemKey = md5(namespace + '#' + group + '#' + dataId + '#' + StorePath + '#' + ReFileName)
-// ConfigCode 用于 MetricConfig 层 configCode 去重和跨清单优先级判定，不参与 ItemKey 生成
+// ItemKey = md5(namespace + '#' + group + '#' + dataId + '#' + suffix + '#' + StorePath + '#' + fileModeStr + '#' + reloadScript + '#' + ReFileName)
+// ConfigCode、EnableClean 不参与 ItemKey 生成
 type ListenRegistryItem struct {
 	// ItemKey 唯一主键
 	ItemKey string
@@ -15,8 +15,10 @@ type ListenRegistryItem struct {
 	Namespace string
 	// Group 配置分组
 	Group string
-	// DataId 配置项标识（fileName）
+	// DataId 配置项标识（PRD 3.2.2 dataId 字段）
 	DataId string
+	// Suffix 文件后缀（PRD 3.2.2 suffix 字段，原样存储）
+	Suffix string
 	// ConfigCode 配置项编号（PRD 3.2.2 新增，用于 configCode 排重和跨清单优先级）
 	ConfigCode string
 	// StorePath 原始storePath（已自动补全路径分隔符）
@@ -27,8 +29,12 @@ type ListenRegistryItem struct {
 	ReFileName string
 	// FileMode 最终文件权限（八进制）
 	FileMode os.FileMode
+	// FileModeStr fileMode 原始字符串（参与 itemKey 生成）
+	FileModeStr string
 	// ReloadScript 重载脚本
 	ReloadScript string
+	// EnableClean 是否执行配置对齐（参与 itemKey 生成）
+	EnableClean bool
 }
 
 // ListenRegistry 监听注册表（全局并发安全，读写加锁）

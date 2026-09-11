@@ -5,10 +5,12 @@ type MetricConfig struct {
 	// ConfigCode 配置项编号，必填，仅允许字母、数字、下划线、横线（PRD 3.2.2）
 	// 用于 MetricConfig 原始条目层按 configCode 去重和跨清单合并优先级判定
 	ConfigCode string `yaml:"configCode" json:"config_code"`
-	// FileName 目标配置文件名称，直接作为Nacos拉取的dataId，非必填；为空时按 group 查询该分组下所有配置
-	FileName string `yaml:"fileName" json:"file_name"`
+	// DataId 目标配置文件名称，也是 Nacos 拉取的 dataId，非必填；为空时按 group 查询该分组下所有配置
+	DataId string `yaml:"dataId" json:"data_id"`
 	// Group 配置文件分组，必填
 	Group string `yaml:"group" json:"group"`
+	// Suffix 文件后缀，非必填，默认 .yml（PRD 3.2.2）
+	Suffix string `yaml:"suffix" json:"suffix"`
 	// StorePath 本地存储目录路径，必填
 	StorePath string `yaml:"storePath" json:"store_path"`
 	// EnableClean 是否执行"配置对齐/清理"，非必填，默认false
@@ -29,7 +31,7 @@ type MetricConfig struct {
 // MetricConfigList 二级配置清单类型
 type MetricConfigList []MetricConfig
 
-// ConfigItem Nacos 配置项（按分组分页查询结果），用于 fileName 为空时按 group 拉取全部配置
+// ConfigItem Nacos 配置项（按分组分页查询结果），用于 DataId 为空时按 group 拉取全部配置
 type ConfigItem struct {
 	// DataId 配置项唯一标识
 	DataId string

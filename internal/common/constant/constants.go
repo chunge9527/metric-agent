@@ -127,10 +127,6 @@ const ConfigBackupDirName = "bak"
 // ConfigTaskLockTimeoutSeconds 配置定时任务锁超时时间（秒，PRD 3.2.2：10分钟）
 const ConfigTaskLockTimeoutSeconds = 10 * 60
 
-// ConfigKnownSuffixes 最终文件名判定用已知后缀（PRD 3.2.3，忽略大小写）
-// dataId 命中任一后缀时直接作为最终文件名，否则补 .yml
-var ConfigKnownSuffixes = []string{".yaml", ".yml", ".properties", ".json", ".xml", ".html", ".htm", ".txt"}
-
 // DefaultCleanSuffixes cleanSuffix 未配置时的默认值（PRD 3.2.4：默认为 .yml、.yaml）
 var DefaultCleanSuffixes = []string{".yml", ".yaml"}
 

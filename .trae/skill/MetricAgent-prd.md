@@ -162,9 +162,11 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
   * configCode：配置项编号，必填，仅允许字母、数字、下划线、横线
 
-  * fileName：目标配置文件名称，直接作为 Nacos 拉取的 dataId，非必填
+  * dataId：目标配置文件名称，也是 Nacos 拉取的 dataId，非必填
 
   * group：配置文件分组，必填
+
+  * suffix：文件后缀，非必填，默认""空字符串
 
   * storePath：本地存储目录路径，必填
 
@@ -182,19 +184,18 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
 **需求描述：** 根据配置清单中配置的多条数据，继续拉取二级配置，写入本地目录并执行重载脚本，所有二级配置都需要依赖监听完成后续配置更新。
 
-**数据结构：**
-
+**数据结构：**  
 // 本地监听注册表单条记录结构（全局并发安全，读写加锁）  
 type ListenRegistryItem struct {  
-ItemKey string // itemKey= md5(namespace + '#' + group + '#' + dataId+ '#' + StorePath+  '#' + ReFileName)，注册表唯一主键  
+ItemKey string // itemKey= md5(namespace+'#'+group+'#'+dataId+'#'+suffix+'#'+StorePath+'#'+fileMode+'#'+ reloadScript+'#'+ReFileName)，注册表唯一主键  
 Namespace string  
 Group string //group  
-DataId string //fileName
-
+DataId string //dataId  
+Suffix string //suffix  
 ConfigCode string  
 StorePath string // 原始storePath（已自动补全路径分隔符）  
 FinalName string // 计算后的最终文件名  
-ReFileName string  
+ReFileName string      
 }  
 // 监听注册表  
 type ListenRegistry struct {  
@@ -212,9 +213,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
   * storePath最后一个字符不为当前操作系统文件路径分隔符，自动补全；
 
-  * 如果fileName和group都非空且不存在于本地监听注册表，执行使用配置中的namespace、fileName、group配置拉取、配置处理逻辑、设置监听，监听注册成功存入本地监听注册表，监听失败打印警告日志，继续处理下一条数据。
+  * 如果dataId和group都非空且不存在于本地监听注册表，执行使用配置中的namespace、dataId、group配置拉取、配置处理逻辑、设置监听，监听注册成功存入本地监听注册表，监听失败打印警告日志，继续处理下一条数据。
 
-  * 如果fileName为空但group不为空，执行以下逻辑
+  * 如果dataId为空但group不为空，执行以下逻辑
 
     * 根据namespace和group查询所有配置，使用分页接口循环查询出该group下所有配置列表。
 
@@ -238,7 +239,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
     * 如果reFileName不为空，拼接规则为：reFileName
 
-    * 如果reFileName为空且dataid包含后缀.yaml、.yml、.properties、.json、.xml、.html、.htm、.txt（忽略大小写），拼接规则为：dataid，否则拼接规则为：dataid+".yml"
+    * 如果reFileName为空，拼接规则为：dataId+suffix，suffix已设置默认值
 
   * **写入机制**：
 

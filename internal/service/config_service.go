@@ -107,24 +107,27 @@ type targetConfig struct {
 	namespace    string
 	group        string
 	dataId       string
+	suffix       string // 文件后缀，直接取自 MetricConfig.Suffix（不做归一化）
 	storePath    string // 已补全路径分隔符
 	reFileName   string
 	reloadScript string
 	finalName    string
 	fileMode     os.FileMode // 最终文件权限，八进制
-	configCode   string      // PRD 3.2.2 新增，用于跨清单 configCode 去重和 itemKey 生成
+	fileModeStr  string      // fileMode 原始字符串（参与 itemKey）
+	enableClean  bool        // 是否执行配置对齐（不参与 itemKey，仅用于配置清理）
+	configCode   string      // PRD 3.2.2 新增，用于跨清单 configCode 去重
 	source       string      // "personal" 或 "public"，标识配置来源（PRD 3.2.2）
 
 	// itemKey_ 缓存字段：buildTarget 时一次性算出，后续 itemKey() 直接返回
-	// 输入字段（ns/group/dataId/storePath/reFileName）构建后不可变，缓存安全
+	// 覆盖所有影响行为的属性，任何变更都会生成新 itemKey
 	itemKey_ string
 }
 
-// itemKey PRD 3.2.3：md5(namespace + '#' + group + '#' + dataId + '#' + storePath + '#' + reFileName)
-// 注意分隔符是单 #，字段顺序不可调换；configCode 不参与 itemKey 生成
-func itemKeyOf(namespace, group, dataId, storePath, reFileName string) string {
+// itemKey PRD 3.2.3：md5(namespace + '#' + group + '#' + dataId + '#' + suffix + '#' + storePath + '#' + fileModeStr + '#' + reloadScript + '#' + reFileName)
+// 注意分隔符是单 #，字段顺序不可调换；configCode、enableClean 不参与 itemKey 生成
+func itemKeyOf(namespace, group, dataId, suffix, storePath, fileModeStr, reloadScript, reFileName string) string {
 	h := md5.New()
-	h.Write([]byte(namespace + "#" + group + "#" + dataId + "#" + storePath + "#" + reFileName))
+	h.Write([]byte(namespace + "#" + group + "#" + dataId + "#" + suffix + "#" + storePath + "#" + fileModeStr + "#" + reloadScript + "#" + reFileName))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -188,7 +191,7 @@ func (s *ConfigService) LoadConfigList() (*configListResult, error) {
 	}
 
 	// 阶段2+3：各自 MetricConfig 层 configCode 去重 + 跨清单合并
-	// 注意：configCode 去重发生在 MetricConfig 原始条目层，所有条目都参与（不区分 fileName）
+	// 注意：configCode 去重发生在 MetricConfig 原始条目层，所有条目都参与（不区分 DataId）
 	var dedupPersonal, dedupPublic model.MetricConfigList
 	if personalOK {
 		dedupPersonal = dedupMetricConfigList(personalList, "personal")
@@ -216,7 +219,7 @@ func (s *ConfigService) LoadConfigList() (*configListResult, error) {
 }
 
 // dedupMetricConfigList MetricConfig 原始条目层按 configCode 先配置先生效去重
-// 所有条目都参与，不区分 fileName；configCode 为空或含非法字符的条目跳过（已在 validateMetricConfigEntry 校验）
+// 所有条目都参与，不区分 DataId；configCode 为空或含非法字符的条目跳过（已在 validateMetricConfigEntry 校验）
 func dedupMetricConfigList(configs model.MetricConfigList, source string) model.MetricConfigList {
 	seen := make(map[string]bool, len(configs))
 	out := make(model.MetricConfigList, 0, len(configs))
@@ -294,7 +297,7 @@ func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigL
 // 此时传入的 configs 已经完成 configCode 层去重 + 跨清单合并（LoadConfigList 阶段），
 // 本函数只负责展开为 targetConfig + itemKey 去重（注册表自然满足 itemKey 唯一性）
 // 返回：targets（展开+itemKey 去重后的二级配置）、cleanStorePaths（enableClean=true 的 storePath 列表）
-// 优化：相同 group 的多个 fileName=="" 条目会缓存 searchGroupDataIds 结果，避免重复分页查询
+// 优化：相同 group 的多个 DataId=="" 条目会缓存 searchGroupDataIds 结果，避免重复分页查询
 func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[string]*targetConfig, []string) {
 	targets := make(map[string]*targetConfig)
 	var cleanStorePaths []string
@@ -313,8 +316,8 @@ func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[stri
 		storePath := normalizeStorePath(cfg.StorePath)
 
 		switch {
-		case cfg.FileName != "" && cfg.Group != "":
-			t := s.buildTarget(storePath, cfg, cfg.FileName)
+		case cfg.DataId != "" && cfg.Group != "":
+			t := s.buildTarget(storePath, cfg, cfg.DataId)
 			key := t.itemKey()
 			if _, exists := targets[key]; !exists {
 				targets[key] = t
@@ -323,7 +326,7 @@ func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[stri
 					"index", i, "itemKey", key, "configCode", cfg.ConfigCode)
 			}
 
-		case cfg.FileName == "" && cfg.Group != "":
+		case cfg.DataId == "" && cfg.Group != "":
 			// 缓存命中检查
 			dataIds, cached := groupDataIdsCache[cfg.Group]
 			if !cached {
@@ -337,11 +340,12 @@ func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[stri
 				}
 				groupDataIdsCache[cfg.Group] = dataIds
 			}
+			// 需求：只有按分组拉取配置，才有必要清理storePath下多余的配置文件
 			if cfg.EnableClean && !cleanSeen[storePath] {
 				cleanStorePaths = append(cleanStorePaths, storePath)
 				cleanSeen[storePath] = true
 			}
-			// fileName 为空时 reFileName 没有意义，用局部 copy 避免修改原 config
+			// DataId 为空时 reFileName 没有意义，用局部 copy 避免修改原 config
 			cfgCopy := *cfg
 			cfgCopy.ReFileName = ""
 			for _, dataId := range dataIds {
@@ -389,74 +393,57 @@ func (s *ConfigService) validateMetricConfigEntry(cfg *model.MetricConfig, idx i
 
 // buildTarget 构建具体目标配置（itemKey 也一并算好缓存）
 func (s *ConfigService) buildTarget(storePath string, cfg *model.MetricConfig, dataId string) *targetConfig {
+	suffix := normalizeSuffix(cfg.Suffix)
 	t := &targetConfig{
 		namespace:    s.params.Namespace,
 		group:        cfg.Group,
 		dataId:       dataId,
+		suffix:       suffix,
 		storePath:    storePath,
 		reFileName:   cfg.ReFileName,
 		reloadScript: cfg.ReloadScript,
-		finalName:    finalNameOf(dataId, cfg.ReFileName),
+		finalName:    finalNameOf(dataId, cfg.ReFileName, suffix),
 		fileMode:     parseFileMode(cfg.FileMode, myconstant.DefaultConfigFilePerm),
+		fileModeStr:  cfg.FileMode,
+		enableClean:  cfg.EnableClean,
 		configCode:   cfg.ConfigCode,
 		source:       cfg.Source,
 	}
-	t.itemKey_ = itemKeyOf(t.namespace, t.group, t.dataId, t.storePath, t.reFileName)
+	t.itemKey_ = itemKeyOf(t.namespace, t.group, t.dataId, t.suffix, t.storePath, t.fileModeStr, t.reloadScript, t.reFileName)
 	return t
 }
 
 // DistributeAllConfigs 串行分发所有二级配置（PRD 3.2.3）
 // 架构：配置清单走定时拉取（LoadConfigList 完成拉取+展开+去重+合并）；二级配置走 Nacos 监听（AddListener）
-//   - 新配置 / AddListener 曾失败未入注册表的配置：走 !exists 分支 → GetConfig → writeConfig → runReloadScript → AddListener
-//   - 已存在配置但属性变更：CancelListener → Remove → 重新 processTarget（PRD 3.2.2 个性化优先级）
-//   - 已存在配置且属性一致：跳过（Nacos 监听已持续推送变更）
-//   - 已删除配置：CancelListener → 从注册表移除
+//   - 新配置 / 属性变更配置 / AddListener 曾失败未入注册表：itemKey 查不到 → 完整流程 processTarget
+//   - 已存在且属性完全一致：跳过（Nacos 监听已持续推送变更）
+//   - 已删除配置：removeStale 先移除
+//
+// 注：itemKey 覆盖影响 Nacos 监听标识 + 最终落盘路径的属性
+// （ns/group/dataId/suffix/storePath/fileMode/reloadScript/reFileName），
+// enableClean 不参与 itemKey，仅控制是否执行配置清理
 func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
 	targets := result.mergedTargets
 	total := len(targets)
 	success := 0
 	failed := 0
 
-	// 处理配置：新的 / AddListener 曾失败未入注册表 → processTarget；已存在但属性变更 → 重新注册；已存在且一致 → 跳过
-	for _, t := range targets {
-		existing, exists := s.registry.Get(t.itemKey())
-		if !exists {
-			// 全新配置，完整流程
-			if s.processTarget(t) {
-				success++
-			} else {
-				failed++
-			}
-			continue
-		}
-		// 已注册但属性有变更（ReloadScript/FileMode 任一不同）
-		// itemKey 本身已包含 storePath/dataId/configCode/reFileName，变更会导致 registry 查不到（走到 !exists 分支）
-		// 这里 needsReregister 只比 itemKey 没覆盖的 ReloadScript/FileMode
-		if needsReregister(existing, t) {
-			logger.Info("配置属性变更，重新注册",
-				"itemKey", t.itemKey(),
-				"old_storePath", existing.StorePath, "new_storePath", t.storePath,
-				"old_reloadScript", existing.ReloadScript, "new_reloadScript", t.reloadScript)
-			// 先取消旧监听 + 移除
-			_ = s.cc.CancelListener(existing.DataId, existing.Group)
-			s.registry.Remove(existing.ItemKey)
-			s.listenerMuMu.Lock()
-			delete(s.listenerMu, existing.ItemKey)
-			s.listenerMuMu.Unlock()
-			// 重新注册（会重新 writeConfig + register listener）
-			if s.processTarget(t) {
-				success++
-			} else {
-				failed++
-			}
-			continue
-		}
-		// 已存在且属性一致 → 跳过（Nacos 监听已持续推送变更）
-		// AddListener 失败未入注册表的条目会在下一轮定时拉取自然走 !exists 分支重新完整重试 processTarget
-	}
-
-	// 移除失效项
+	// 先移除失效项，避免移除监听导致非group\dataid变更时，需要监听的配置没有监听
+	// 例如配置项group/dataid相同，storePath不同，需要监听的配置没有监听，因为被移除了，先执行移除监听即可避免。
 	removed := s.removeStale(targets, result)
+
+	// 处理配置：itemKey 查不到（全新 / 属性变更 / AddListener 曾失败）→ processTarget；已存在 → 跳过
+	for _, t := range targets {
+		if _, exists := s.registry.Get(t.itemKey()); exists {
+			// 已存在且 itemKey 完全一致 = 所有属性一致，跳过
+			continue
+		}
+		if s.processTarget(t) {
+			success++
+		} else {
+			failed++
+		}
+	}
 
 	// enableClean 触发的配置清理（失败不影响后续，PRD 3.2.3 / 3.2.4）
 	s.distributeClean(result, result.cleanStorePaths, targets)
@@ -474,13 +461,6 @@ func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
 		"current_listeners", s.registry.Len(),
 		"removed", removed,
 	)
-}
-
-// needsReregister 判断已注册 item 与新 targetConfig 是否需要重新注册
-// itemKey 已包含 namespace/group/dataId/storePath/reFileName，变了自然查不到 registry
-// 这里只比较 itemKey 没覆盖的 ReloadScript 和 FileMode（影响行为但不影响 itemKey 生成）
-func needsReregister(existing *ListenRegistryItem, t *targetConfig) bool {
-	return existing.ReloadScript != t.reloadScript || existing.FileMode != t.fileMode
 }
 
 // parseFileMode 解析配置项的 fileMode 字符串为 os.FileMode
@@ -611,12 +591,15 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 		Namespace:    t.namespace,
 		Group:        t.group,
 		DataId:       t.dataId,
+		Suffix:       t.suffix,
 		ConfigCode:   t.configCode,
 		StorePath:    t.storePath,
 		FinalName:    t.finalName,
 		ReFileName:   t.reFileName,
 		FileMode:     t.fileMode,
+		FileModeStr:  t.fileModeStr,
 		ReloadScript: t.reloadScript,
+		EnableClean:  t.enableClean,
 	}
 	if s.registry.Add(item) {
 		logger.Info("二级配置分发成功",
@@ -645,6 +628,18 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 				"storePath", t.storePath, "panic", fmt.Sprint(r))
 		}
 	}()
+
+	// 配置已被 removeStale 从 registry 移除（itemKey 已不存在），可能原因：
+	// 1) 定时拉取检测到配置清单变更，old itemKey 被取消监听；
+	// 2) Nacos SDK CancelListener 之后仍有延迟到达的 onChange 回调。
+	// 此时放弃执行，防止旧配置闭包覆盖新文件或触发错误的 reloadScript。
+	if _, ok := s.registry.Get(t.itemKey()); !ok {
+		logger.Info("监听回调：配置已不在注册表，跳过执行（可能已被移除或属性变更）",
+			"itemKey", t.itemKey(),
+			"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+			"storePath", t.storePath)
+		return
+	}
 
 	mu := s.perConfigLock(t.itemKey())
 	mu.Lock()
@@ -1110,18 +1105,25 @@ func normalizeStorePath(p string) string {
 }
 
 // finalNameOf 计算最终文件名（PRD 3.2.3）
-// reFileName 非空优先；否则 dataId 命中已知后缀则用 dataId，否则 dataId+".yml"
-func finalNameOf(dataId, reFileName string) string {
+// reFileName 非空优先；否则 dataId + suffix（suffix 已通过 normalizeSuffix 归一化）
+func finalNameOf(dataId, reFileName, suffix string) string {
 	if reFileName != "" {
 		return reFileName
 	}
-	lower := strings.ToLower(dataId)
-	for _, ext := range myconstant.ConfigKnownSuffixes {
-		if strings.HasSuffix(lower, ext) {
-			return dataId
-		}
+	return dataId + suffix
+}
+
+// normalizeSuffix 归一化文件后缀（PRD 3.2.2）
+// TrimSpace 去空白；空值返回 ""（不补默认值）；无前导 "." 自动补齐
+func normalizeSuffix(suffix string) string {
+	s := strings.TrimSpace(suffix)
+	if s == "" {
+		return ""
 	}
-	return dataId + ".yml"
+	if !strings.HasPrefix(s, ".") {
+		s = "." + s
+	}
+	return s
 }
 
 // buildFinalNameSets 按 storePath 汇总最终文件名集合
