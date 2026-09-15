@@ -834,12 +834,17 @@ func (s *ConfigService) distributeClean(result *configListResult, cleanStorePath
 			"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
+	// cleanStorePaths为空，表明没有需要清理配置的路径
+	if len(cleanStorePaths) == 0 {
+		return
+	}
 
 	now := time.Now()
 	if !containsInt(s.cleanFixHours, now.Hour()) {
-		logger.Info("当前时刻不在配置清理定点小时内，跳过本次清理",
-			"current_hour", now.Hour(), "cleanFixHour", s.cleanFixHours,
-			"personal_dataId", personalDataID, "public_dataId", publicDataID)
+		//只在匹配时打印
+		// logger.Info("当前时刻不在配置清理定点小时内，跳过本次清理",
+		// 	"current_hour", now.Hour(), "cleanFixHour", s.cleanFixHours,
+		// 	"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 
