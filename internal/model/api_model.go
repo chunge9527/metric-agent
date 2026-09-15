@@ -31,6 +31,8 @@ type HealthResponse struct {
 	AgentID string `json:"agent_id"`
 	// AgentGroup Agent分组
 	AgentGroup string `json:"agent_group"`
+	// Version 应用版本号（ldflags 注入，构建时指定）
+	Version string `json:"version"`
 	// Timestamp 时间戳
 	Timestamp int64 `json:"timestamp"`
 }

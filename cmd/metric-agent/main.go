@@ -50,6 +50,7 @@ func main() {
 	// ========== 命令行参数解析 ==========
 	var (
 		helpFlag    bool
+		versionFlag bool
 		execFlag    string
 		execFile    string
 		execPort    int
@@ -65,6 +66,7 @@ func main() {
 	}
 
 	flag.BoolVar(&helpFlag, "help", false, "显示帮助信息")
+	flag.BoolVar(&versionFlag, "version", false, "显示版本信息")
 	flag.StringVar(&execFlag, "exec", "", "指令执行模式：Shell脚本字符串")
 	flag.StringVar(&execFile, "exec-file", "", "指令执行模式：Shell脚本文件路径")
 	flag.IntVar(&execPort, "port", 9092, "指令执行模式：目标HTTP服务端口（发送请求到 127.0.0.1:port）")
@@ -78,6 +80,12 @@ func main() {
 	// ========== 帮助信息（最高优先级） ==========
 	if helpFlag {
 		printUsage()
+		os.Exit(0)
+	}
+
+	// ========== 版本信息（最高优先级） ==========
+	if versionFlag {
+		fmt.Println(myconstant.AppVersion)
 		os.Exit(0)
 	}
 
@@ -446,6 +454,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("通用参数:")
 	fmt.Println("  --help               显示帮助信息（最高优先级）")
+	fmt.Println("  --version            显示版本信息（最高优先级）")
 	fmt.Println()
 	fmt.Println("业务规则:")
 	fmt.Println("  1. 指令模式与HTTP模式参数互斥，同时传入两类参数直接报错")

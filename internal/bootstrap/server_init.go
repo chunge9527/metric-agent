@@ -202,6 +202,7 @@ func InitServer(cfg *model.AgentConfig, bindAddr string) (*http.Server, func(), 
 			Status:     "ok",
 			AgentID:    cfg.Agent.ID,
 			AgentGroup: cfg.Agent.Group,
+			Version:    myconstant.AppVersion,
 			Timestamp:  time.Now().Unix(),
 		})
 	})

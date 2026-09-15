@@ -142,7 +142,7 @@ var DefaultConfigCleanBlacklist = []string{"/etc", "/bin", "/sbin", "/usr/bin"}
 //	go build -ldflags="-X metric-agent/internal/common/constant.AppVersion=20260903-gitabc123"
 //
 // 未注入时使用默认值 "dev"
-var AppVersion = "0.0.1"
+var AppVersion = "v0.0.1"
 
 // ============ 模式标识 ============
 
