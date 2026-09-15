@@ -97,6 +97,33 @@ type NacosConfig struct {
 	// NotLoadCacheAtStart 启动时是否不加载本地缓存（默认 true，显式 false 才加载）
 	// 使用 *bool 指针：nil=未配置→默认true；false=显式关闭；true=显式开启
 	NotLoadCacheAtStart *bool `yaml:"notLoadCacheAtStart" json:"not_load_cache_at_start"`
+
+	// LogDir nacos sdk日志输出目录（相对路径基于可执行文件目录）
+	// 未配置时默认 ./logs/nacos
+	LogDir string `yaml:"logDir" json:"log_dir"`
+	// LogLevel nacos sdk日志级别：debug/info/warn/error；空或非法默认 warn
+	LogLevel string `yaml:"logLevel" json:"log_level"`
+	// CacheDir nacos sdk本地缓存目录（相对路径基于可执行文件目录）
+	// 未配置时使用 nacos sdk 默认值 ./cache
+	CacheDir string `yaml:"cacheDir" json:"cache_dir"`
+	// LogRollingConfig nacos sdk日志滚动配置
+	// 未配置时使用 nacos sdk 内置默认值（MaxSize=100MB, MaxAge=30天, MaxBackups=5）
+	LogRollingConfig *NacosLogRollingConfig `yaml:"logRollingConfig" json:"log_rolling_config"`
+}
+
+// NacosLogRollingConfig Nacos SDK日志滚动配置
+// 字段对齐 nacos-sdk-go ClientLogRollingConfig（Lumberjack 风格）
+type NacosLogRollingConfig struct {
+	// MaxSize 单个日志文件最大（MB），超过切割；<=0 时 SDK 默认 100
+	MaxSize int `yaml:"maxSize" json:"max_size"`
+	// MaxAge 归档日志保留天数；<=0 时 SDK 默认 30
+	MaxAge int `yaml:"maxAge" json:"max_age"`
+	// MaxBackups 最多保留归档日志文件数；<=0 时 SDK 默认 5
+	MaxBackups int `yaml:"maxBackups" json:"max_backups"`
+	// LocalTime 备份文件名使用本地时区时间，默认 true
+	LocalTime bool `yaml:"localTime" json:"local_time"`
+	// Compress 是否 gzip 压缩旧日志，默认 false
+	Compress bool `yaml:"compress" json:"compress"`
 }
 
 // ShellConfig Shell相关配置（嵌套容器）
@@ -201,6 +228,9 @@ type UploadConfig struct {
 
 // LogConfig 日志配置（PRD 5.1~5.7）
 type LogConfig struct {
+	// LogFile 日志文件路径（相对路径基于可执行文件目录）
+	// 优先级：--logs 命令行参数 > 此处配置 > 默认值 ./logs/metricAgent.log
+	LogFile string `yaml:"logFile" json:"log_file"`
 	// Level 日志级别：debug / info / warn / error，默认 info
 	Level string `yaml:"level" json:"level"`
 	// MaxFileSize 单个日志文件最大大小（MB），默认 100；<=0 时使用默认值

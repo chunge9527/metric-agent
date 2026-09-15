@@ -139,6 +139,26 @@ func fillDefaults(cfg *model.AgentConfig) {
 		cfg.Nacos.Group = myconstant.DefaultNacosGroup
 	}
 
+	// nacos.LogLevel 默认值：空或非法都兜底为 info
+	if !isValidLogLevel(cfg.Nacos.LogLevel) {
+		cfg.Nacos.LogLevel = "info"
+	} else {
+		cfg.Nacos.LogLevel = strings.ToLower(strings.TrimSpace(cfg.Nacos.LogLevel))
+	}
+
+	// nacos.LogRollingConfig 默认值：用户显式配置后，各 int 字段 <=0 回填 SDK 默认值
+	if cfg.Nacos.LogRollingConfig != nil {
+		if cfg.Nacos.LogRollingConfig.MaxSize <= 0 {
+			cfg.Nacos.LogRollingConfig.MaxSize = 100
+		}
+		if cfg.Nacos.LogRollingConfig.MaxAge <= 0 {
+			cfg.Nacos.LogRollingConfig.MaxAge = 30
+		}
+		if cfg.Nacos.LogRollingConfig.MaxBackups <= 0 {
+			cfg.Nacos.LogRollingConfig.MaxBackups = 5
+		}
+	}
+
 	if cfg.Config.PullInterval < 0 {
 		cfg.Config.PullInterval = myconstant.DefaultPullIntervalMinutes
 	}

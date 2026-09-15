@@ -5,94 +5,138 @@
 agent:
   # 节点唯一标识，必填，仅允许字母、数字、下划线、横线
   id: node-001
-  
-# 服务特性总开关，true启用，false禁用，未配置时默认全部false）
+
+# 服务特性总开关
+# 未配置时默认全部 true（保持向后兼容）；显式 false 才关闭
 feature:
-  # Nacos配置中心、配置清单拉取、二级配置分发、配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
+  # Nacos配置中心、配置清单拉取、二级配置分发、配置变更监听开关
+  # 关闭后不初始化nacos客户端、不监听配置变更
   enableNacos: true
-  # 进程守护服务开关，关闭不启动进程守护、不加载crontab.yml
+  # 进程守护服务开关
+  # 关闭不启动进程守护、不加载crontab.yml
   enableGuardian: false
-  # 定时任务调度服务开关，关闭不加载scheduledConfig.yml、不运行定时任务
+  # 定时任务调度服务开关
+  # 关闭不加载scheduledConfig.yml、不运行定时任务
   enableSchedule: false
-  
+
 # Nacos 配置中心连接信息
 nacos:
-  # Nacos 服务地址
+  # Nacos 服务地址，enableNacos=true 时必填
+  # 支持格式：http://host:port、https://host:port、host:port、host（默认端口8848）
   address: http://192.168.16.177:8848
-  # 命名空间id（public命名空间id就是空字符串）
+  # 命名空间id（public命名空间id就是空字符串，填"public"会导致所有查询返回空）
   namespace: ""
-  # 分组
+  # 分组；未配置或为空时默认 "DEFAULT_GROUP"
   group: DEFAULT_GROUP
-  # 鉴权账号密码（管理员账号才有读取多GROUP的权限）
+  # 鉴权用户名（空字符串表示不启用鉴权）
   username: user_nacos
+  # 鉴权密码（空字符串表示不启用鉴权）
   password: Nacos,2026
-
-  # 单次 Nacos http/gRPC 请求超时时间，单位（毫秒）
+  # 单次 Nacos HTTP/gRPC 请求超时（毫秒）；<=0 时默认 5000
   timeout: 5000
-  # 是否在启动时不加载配置缓存，默认true
+  # 启动时是否不加载本地缓存（默认 true）
   notLoadCacheAtStart: true
+
+  # nacos sdk日志输出目录；相对路径基于可执行文件目录
+  # 未配置时默认 ./logs/nacos；需提前 mkdir，SDK 内部固定日志文件名 nacos-sdk.log
+  logDir: "/data/log/nacos"
+  # nacos sdk日志级别：debug / info / warn / error（大小写不敏感，内部统一转小写）
+  # 空或非法值兜底填 "info"
+  logLevel: "info"
+  # nacos sdk本地缓存目录；相对路径基于可执行文件目录
+  # 未配置时不设置，使用 nacos sdk 默认值 ./cache
+  cacheDir: "/data/cache/nacos"
+  # nacos sdk日志滚动配置（Lumberjack 风格）
+  # 整段注释掉则不设置，完全走 nacos sdk 原生默认值
+  logRollingConfig:
+    # 单个日志文件最大（MB），超过切割；<=0 时默认 100
+    maxSize: 100
+    # 归档日志保留天数；<=0 时默认 30
+    maxAge: 30
+    # 最多保留归档日志文件数；<=0 时默认 5
+    maxBackups: 10
+    # 是否 gzip 压缩旧日志，默认 false
+    compress: false
+    # 备份文件名使用本地时区时间，默认 true
+    localTime: true
 
 # Shell 远程命令加密配置
 shell:
   encrypt:
-    # AES-128加密密钥（16字节），用于远程命令请求/响应加密
-    # 不建议修改默认值，会导致命令行模式无法正常工作
-    # 不要修改长度，否则JAVA侧加密会比较麻烦
+    # AES-128-CBC 加密密钥（16字节），用于远程命令请求/响应加密
+    # 指令执行模式（--exec）使用常量 DefaultExecModeAESKey = "7sK9p2R5zG8tB4vN"
+    # 两端必须一致；不建议修改默认值
     key: "7sK9p2R5zG8tB4vN"
 
 # 配置清单拉取、二级配置分发、配置清理配置
 config:
-  # 小于0默认为1，单位分钟
-  pullInterval: 1  
-  # 配置清理相关配置
-  cleanOrphanFile:
-    # 是否开启配置清理，默认false关闭
-    # 配置清理只对按group批量拉取配置有效
-    enable: true 
-    # 定点执行清理时间配置，2代表2点执行，可配置多个时间点
-    # 只支持大于0小于23的正整数，不符合要求的直接过滤
-    # 必填，若无有效配置不执行配置清理    
-    cleanFixHour: [0,1,10]   
-    # 需要清理的文件后缀，排除空字符串，必填，不配置不执行配置清理
-    cleanSuffix: [".yml",".yaml"]      
-  # 配置重载脚本超时（秒）
+  # 配置主动拉取间隔（分钟）；<0 时默认 1
+  pullInterval: 1
+  # 配置重载脚本超时（秒）；<=0 时默认 60
   reloadScript:
     timeout: 60
-    
-# 进程守护超时配置
+  # 孤儿配置文件清理（配置清理只对按group批量拉取配置有效）
+  cleanOrphanFile:
+    # 是否开启配置清理，默认 false（防止误删）
+    enable: true
+    # 定点执行清理时间（小时），支持多个时间点，仅 1~23 有效，需排重
+    # 无有效配置则不执行清理
+    cleanFixHour: [0, 1, 10]
+    # 需要清理的文件后缀，排除空字符串，不配置则不执行清理
+    cleanSuffix: [".yml", ".yaml"]
+
+# 进程守护配置
 crontab:
-  # 守护巡检时间间隔（分钟）
+  # 守护巡检周期（分钟）；<=0 时默认 1
   interval: 1
+  # 健康检查脚本超时（秒）；<=0 时默认 60
   healthCheck:
-    # 健康检查脚本超时（秒）
     timeout: 60
+  # 启动脚本超时（秒）；<=0 时默认 120
   startScript:
-    # 启动脚本超时（秒）
     timeout: 120
 
-# 请求透传默认超时（秒）
+# 请求透传配置
 forward:
+  # 默认超时（秒）；<=0 时默认 30
   timeout: 30
 
 # VictoriaMetrics 监控组件配置
 victoriaMetrics:
-  # VictoriaMetrics 查询地址
+  # VictoriaMetrics 查询地址（enableSchedule=true 时必填）
   url: http://192.168.50.177:9090
-  # 鉴权请求头（如需要），支持环境变量引用
+  # 鉴权请求头列表，支持多个自定义头
   headers:
     - key: Authorization
       value: Basic dXNlc192Tp7U01TNH02b1RkV1glc1U5dysrTXg5WjZuV3dwSU16Y1cr043a2pHTjJna2d6ZGpzPQ==
 
 # HTTP 接口鉴权配置
 auth:
-  # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION
-  # 生产禁止硬编码，优先环境变量注入
+  # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION，必填
   key: "bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ="
 
+# 文件上传配置
+upload:
+  # 单文件最大上传大小（字节）；<=0 时默认 100MB（104857600）
+  maxFileSize: 104857600
+  # 敏感目录黑名单（绝对路径，大小写不敏感匹配），命中即拒绝上传
+  # 未配置时使用内置默认列表（Linux: /etc /root /proc /sys /dev /var/run /var/lib /boot /sbin /bin /usr/bin /usr/sbin；Windows: c:\windows 等）
+  sensitivePaths:
+    - /etc
+    - /root
+    - /proc
+    - /sys
+    - /dev
+
+# 日志配置
 log:
-  # 日志级别：debug / info / warn / error，默认 info
+  # 日志文件路径；相对路径基于可执行文件目录，需提前 mkdir
+  # 三级优先级：--logs 命令行参数 > 此处配置 > 默认值 ./logs/metricAgent.log
+  logFile: "/data/log/metric-agent/metricAgent.log"
+  # 日志级别：debug / info / warn / error（大小写不敏感）
+  # 空或非法值默认 info
   level: info
-  # 单个日志文件最大大小，单位 MB，默认 100
+  # 单个日志文件最大（MB）；<=0 时默认 100
   maxFileSize: 100
-  # 日志最大保留天数，默认30天
+  # 日志最大保留天数；<=0 时默认 30
   maxRetainDays: 30

@@ -43,6 +43,15 @@ func init() {
 	}
 }
 
+// resolveNacosPath 路径解析：相对路径基于 nacosExecDir（可执行文件目录），绝对路径直接返回
+// 与 bootstrap.resolvePath 逻辑一致，但避免 bootstrap ↔ nacos_client 循环引用
+func resolveNacosPath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(nacosExecDir, path)
+}
+
 // NacosClient Nacos配置中心客户端实现
 //
 // 字段说明：
@@ -177,17 +186,45 @@ func (n *NacosClient) connect(cfg model.NacosConfig) error {
 		notLoadCache = *cfg.NotLoadCacheAtStart
 	}
 
+	// nacos sdk 日志输出目录（sdk 内部固定文件名 nacos-sdk.log）
+	// 用户配置了 LogDir → 用它（相对路径基于可执行文件目录）；没配 → 默认 ./logs/nacos
+	logDir := filepath.Join(nacosExecDir, "logs", "nacos")
+	if strings.TrimSpace(cfg.LogDir) != "" {
+		logDir = resolveNacosPath(cfg.LogDir)
+	}
+
+	// nacos sdk 日志级别；fillDefaults 已兜底并归一化，直接信任
+	logLevel := cfg.LogLevel
+
+	// 构造 ClientConfig
+	clientConfig := &nacosconstant.ClientConfig{
+		NamespaceId:         cfg.Namespace,
+		TimeoutMs:           timeoutMs,
+		NotLoadCacheAtStart: notLoadCache,
+		Username:            cfg.Username,
+		Password:            cfg.Password,
+		LogDir:              logDir,
+		LogLevel:            logLevel,
+	}
+
+	// nacos sdk 本地缓存目录；用户配了 CacheDir 才设置，没配就走 SDK 默认值 ./cache
+	if strings.TrimSpace(cfg.CacheDir) != "" {
+		clientConfig.CacheDir = resolveNacosPath(cfg.CacheDir)
+	}
+
+	// nacos sdk 日志滚动配置；用户配了 LogRollingConfig 才传，没配走 SDK 原生默认值
+	if cfg.LogRollingConfig != nil {
+		clientConfig.LogRollingConfig = &nacosconstant.ClientLogRollingConfig{
+			MaxSize:    cfg.LogRollingConfig.MaxSize,
+			MaxAge:     cfg.LogRollingConfig.MaxAge,
+			MaxBackups: cfg.LogRollingConfig.MaxBackups,
+			LocalTime:  cfg.LogRollingConfig.LocalTime,
+			Compress:   cfg.LogRollingConfig.Compress,
+		}
+	}
+
 	param := vo.NacosClientParam{
-		ClientConfig: &nacosconstant.ClientConfig{
-			NamespaceId:         cfg.Namespace,
-			TimeoutMs:           timeoutMs,
-			NotLoadCacheAtStart: notLoadCache,
-			Username:            cfg.Username,
-			Password:            cfg.Password,
-			// 绝对路径：基于可执行文件目录，避免多实例 cwd 不同导致日志分散
-			LogDir:   filepath.Join(nacosExecDir, "logs", "nacos"),
-			LogLevel: "warn",
-		},
+		ClientConfig: clientConfig,
 		ServerConfigs: []nacosconstant.ServerConfig{
 			{
 				IpAddr: host,

@@ -71,7 +71,7 @@ func main() {
 	flag.IntVar(&execTimeout, "timeout", 0, "指令执行模式：执行超时秒数（默认使用服务端 DefaultExecTimeout=60）")
 	flag.StringVar(&configFlag, "config", myconstant.DefaultConfigPath, "HTTP服务模式：配置文件路径（相对路径基于可执行文件目录）")
 	flag.StringVar(&bindAddr, "bind-addr", myconstant.DefaultBindAddr, "HTTP服务模式：监听地址")
-	flag.StringVar(&logsFlag, "logs", myconstant.DefaultLogPath, "HTTP服务模式：日志文件路径（相对路径基于可执行文件目录）")
+	flag.StringVar(&logsFlag, "logs", "", "HTTP服务模式：日志文件路径（相对路径基于可执行文件目录，优先级高于YAML中log.logFile）")
 
 	flag.Parse()
 
@@ -317,9 +317,18 @@ func runHTTPMode(configPath string, bindAddr string, logPath string) int {
 	}
 
 	// ========== 第二步：初始化日志 ==========
-	// 日志路径优先级：命令行 --logs > 默认值（PRD 5.4）
-	// 注意：yaml 里没有单独的 logPath 字段，路径始终由 --logs 参数控制
-	resolvedLogPath := bootstrap.BootstrapPath(logPath)
+	// 日志文件路径三级优先级：
+	//   1. 命令行 --logs 显式值（最优先，空字符串表示未显式传入）
+	//   2. YAML log.logFile 配置值
+	//   3. DefaultLogPath 内置默认值
+	logFile := myconstant.DefaultLogPath
+	switch {
+	case strings.TrimSpace(logPath) != "":
+		logFile = logPath
+	case strings.TrimSpace(cfg.Log.LogFile) != "":
+		logFile = cfg.Log.LogFile
+	}
+	resolvedLogPath := bootstrap.BootstrapPath(logFile)
 	if err := logger.InitFileLogger(resolvedLogPath, cfg.Log); err != nil {
 		fmt.Fprintf(os.Stderr, "错误：日志初始化失败 %v\n", err)
 		return 1
@@ -431,7 +440,8 @@ func printUsage() {
 	fmt.Println("  --config string      配置文件路径 (default \"./metricAgent.yml\")")
 	fmt.Println("                       相对路径基于可执行文件所在目录，支持绝对路径")
 	fmt.Println("  --bind-addr string   HTTP监听地址 (default \"0.0.0.0:9092\")")
-	fmt.Println("  --logs string        日志文件路径 (default \"./logs/metricAgent.log\")")
+	fmt.Println("  --logs string        日志文件路径 (YAML可配: log.logFile, 默认 \"./logs/metricAgent.log\")")
+	fmt.Println("                       优先级: --logs > log.logFile > 默认值")
 	fmt.Println("                       相对路径基于可执行文件所在目录")
 	fmt.Println()
 	fmt.Println("通用参数:")
