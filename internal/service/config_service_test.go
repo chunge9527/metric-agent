@@ -254,8 +254,10 @@ func TestBuildFinalNameSets(t *testing.T) {
 		"a": {storePath: "/a/", finalName: "x.yml"},
 		"b": {storePath: "/a/", finalName: "y.yml"},
 		"c": {storePath: "/b/", finalName: "z.yml"},
+		"d": {storePath: "/c/", finalName: "w.yml"},
 	}
-	sets := buildFinalNameSets(targets)
+	// 只收集 /a/ 和 /b/，/c/ 应被跳过
+	sets := buildFinalNameSets(targets, []string{"/a/", "/b/"})
 	if len(sets) != 2 {
 		t.Fatalf("应有 2 个 storePath，实际 %d", len(sets))
 	}
@@ -264,6 +266,14 @@ func TestBuildFinalNameSets(t *testing.T) {
 	}
 	if !sets["/b/"]["z.yml"] {
 		t.Error("/b/ 的文件名集合不完整")
+	}
+	if _, ok := sets["/c/"]; ok {
+		t.Error("/c/ 不应出现在结果中（不在白名单内）")
+	}
+
+	// 空白名单应返回 nil
+	if sets = buildFinalNameSets(targets, nil); sets != nil {
+		t.Error("空白名单应返回 nil")
 	}
 }
 

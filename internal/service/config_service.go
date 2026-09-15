@@ -841,16 +841,15 @@ func (s *ConfigService) distributeClean(result *configListResult, cleanStorePath
 
 	now := time.Now()
 	if !containsInt(s.cleanFixHours, now.Hour()) {
-		//只在匹配时打印
+		// 不再打印日志
 		// logger.Info("当前时刻不在配置清理定点小时内，跳过本次清理",
 		// 	"current_hour", now.Hour(), "cleanFixHour", s.cleanFixHours,
 		// 	"personal_dataId", personalDataID, "public_dataId", publicDataID)
 		return
 	}
 
-	// finalNameSets 从 mergedTargets 构建即可
-	// 因为 cleanStorePaths 也来自 mergedConfigs 展开阶段，storePath 覆盖自然一致
-	finalNameSets := buildFinalNameSets(targets)
+	// finalNameSets 仅收集 cleanStorePaths 涉及的 storePath，避免遍历全量 targets
+	finalNameSets := buildFinalNameSets(targets, cleanStorePaths)
 
 	for _, sp := range cleanStorePaths {
 		if names, ok := finalNameSets[sp]; ok {
@@ -1132,9 +1131,20 @@ func normalizeSuffix(suffix string) string {
 }
 
 // buildFinalNameSets 按 storePath 汇总最终文件名集合
-func buildFinalNameSets(targets map[string]*targetConfig) map[string]map[string]bool {
+// storePaths 为白名单：仅收集这些 storePath 的文件名；空则不做任何事
+func buildFinalNameSets(targets map[string]*targetConfig, storePaths []string) map[string]map[string]bool {
+	if len(storePaths) == 0 {
+		return nil
+	}
+	whitelist := make(map[string]bool, len(storePaths))
+	for _, sp := range storePaths {
+		whitelist[sp] = true
+	}
 	m := make(map[string]map[string]bool)
 	for _, t := range targets {
+		if !whitelist[t.storePath] {
+			continue
+		}
 		if m[t.storePath] == nil {
 			m[t.storePath] = make(map[string]bool)
 		}
