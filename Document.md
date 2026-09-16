@@ -9,7 +9,7 @@
 | 项目      | 说明                                                                       |
 | ------- | ------------------------------------------------------------------------ |
 | 基础 URL  | `http://{host}:{port}`，默认端口 **9092**，默认绑定 **0.0.0.0:9092**               |
-| 鉴权方式    | 请求头 `Authentication` 或 `CIB-AUTHORIZATION`，值为配置文件中的 `auth.key`，大小写敏感精确匹配 |
+| 鉴权方式    | 请求头 `Authentication`，值为配置文件中的 `auth.key`，大小写敏感精确匹配 |
 | 鉴权白名单   | `/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护）                                      |
 | 请求体大小限制 | 所有接口 10MB（除 `/api/v1/upload` 另受文件大小限制）                                   |
 | 默认超时    | 连接读写 30s，空闲 120s；命令执行最长 600s；请求透传最长 120s                                 |
@@ -37,7 +37,7 @@
 | ------------ | --------------------------------------------- |
 | **Method**   | `GET`                                         |
 | **URL**      | `/health`                                     |
-| **鉴权**       | ✅ 不需要（`Authentication` 或 `CIB-AUTHORIZATION`） |
+| **鉴权**       | ✅ 不需要（`Authentication`） |
 | **Query 参数** | 无                                             |
 | **请求体**      | 无                                             |
 
@@ -210,7 +210,7 @@ print(plaintext.decode())
 | ---------------- | -------------------------------------------- |
 | **Method**       | 所有 HTTP 方法（GET/POST/PUT/DELETE/...），透传到目标服务  |
 | **URL**          | `/forward` 或 `/forward/{path_suffix}`        |
-| **鉴权**           | ✅ 需要（`Authentication` 或 `CIB-AUTHORIZATION`） |
+| **鉴权**           | ✅ 需要（`Authentication`） |
 | **Content-Type** | 与原始请求相同，由透传保留                                |
 
 #### 1.4.1 Query 参数
@@ -269,7 +269,7 @@ curl -X POST -H "Authentication: your-auth-key" \
 | ---------------- | -------------------------------------------- |
 | **Method**       | `POST`                                       |
 | **URL**          | `/api/v1/upload`                             |
-| **鉴权**           | ✅ 需要（`Authentication` 或 `CIB-AUTHORIZATION`） |
+| **鉴权**           | ✅ 需要（`Authentication`） |
 | **Content-Type** | `multipart/form-data`                        |
 | **单文件大小上限**      | 默认 **100MB**，可通过配置 `upload.maxFileSize` 修改   |
 

@@ -234,7 +234,7 @@ upload:
 
 # HTTP 接口鉴权配置
 auth:
-  # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION
+  # 鉴权密钥，客户端需在请求头携带 Authentication
   # 生产禁止硬编码，优先环境变量注入
   key: ""
 
@@ -551,8 +551,6 @@ Agent 作为 HTTP 服务运行，提供 API 接口：
 所有接口（除 `/api/v1/exec`）需在请求头携带鉴权密钥：
 
 * `Authentication: <auth_key>`
-
-* 或 `CIB-AUTHORIZATION: <auth_key>`
 
 鉴权密钥在 `metricAgent.yml` 的 `auth.key` 中配置。
 
