@@ -34,8 +34,6 @@ nacos:
   password: Nacos,2026
   # 单次 Nacos HTTP/gRPC 请求超时（毫秒）；<=0 时默认 5000
   timeout: 5000
-  # 启动时是否不加载本地缓存（默认 true）
-  notLoadCacheAtStart: true
 
   # nacos sdk日志输出目录；相对路径基于可执行文件目录
   # 未配置时默认 ./logs/nacos；需提前 mkdir，SDK 内部固定日志文件名 nacos-sdk.log

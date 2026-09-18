@@ -180,12 +180,6 @@ func (n *NacosClient) connect(cfg model.NacosConfig) error {
 		timeoutMs = uint64(cfg.Timeout)
 	}
 
-	// 配置启动时是否不加载缓存：nil→默认true；显式值→使用
-	notLoadCache := true
-	if cfg.NotLoadCacheAtStart != nil {
-		notLoadCache = *cfg.NotLoadCacheAtStart
-	}
-
 	// nacos sdk 日志输出目录（sdk 内部固定文件名 nacos-sdk.log）
 	// 用户配置了 LogDir → 用它（相对路径基于可执行文件目录）；没配 → 默认 ./logs/nacos
 	logDir := filepath.Join(nacosExecDir, "logs", "nacos")
@@ -198,13 +192,12 @@ func (n *NacosClient) connect(cfg model.NacosConfig) error {
 
 	// 构造 ClientConfig
 	clientConfig := &nacosconstant.ClientConfig{
-		NamespaceId:         cfg.Namespace,
-		TimeoutMs:           timeoutMs,
-		NotLoadCacheAtStart: notLoadCache,
-		Username:            cfg.Username,
-		Password:            cfg.Password,
-		LogDir:              logDir,
-		LogLevel:            logLevel,
+		NamespaceId: cfg.Namespace,
+		TimeoutMs:   timeoutMs,
+		Username:    cfg.Username,
+		Password:    cfg.Password,
+		LogDir:      logDir,
+		LogLevel:    logLevel,
 	}
 
 	// nacos sdk 本地缓存目录；用户配了 CacheDir 才设置，没配就走 SDK 默认值 ./cache

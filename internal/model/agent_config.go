@@ -94,10 +94,6 @@ type NacosConfig struct {
 	Password string `yaml:"password" json:"password"`
 	// Timeout Nacos单次HTTP/gRPC请求超时（毫秒）；<=0 时使用默认 5000ms
 	Timeout int `yaml:"timeout" json:"timeout"`
-	// NotLoadCacheAtStart 启动时是否不加载本地缓存（默认 true，显式 false 才加载）
-	// 使用 *bool 指针：nil=未配置→默认true；false=显式关闭；true=显式开启
-	NotLoadCacheAtStart *bool `yaml:"notLoadCacheAtStart" json:"not_load_cache_at_start"`
-
 	// LogDir nacos sdk日志输出目录（相对路径基于可执行文件目录）
 	// 未配置时默认 ./logs/nacos
 	LogDir string `yaml:"logDir" json:"log_dir"`
