@@ -36,14 +36,14 @@ var httpFlagSet = map[string]string{
 
 // execFlagSet 指令模式参数集合（用于 detectExplicitExecFlags）
 var execFlagSet = map[string]string{
-	"-exec":       "--exec",
-	"--exec":      "--exec",
-	"-exec-file":  "--exec-file",
-	"--exec-file": "--exec-file",
-	"-port":       "--port",
-	"--port":      "--port",
-	"-timeout":    "--timeout",
-	"--timeout":   "--timeout",
+	"-exec":     "--exec",
+	"--exec":    "--exec",
+	"-um":       "--um",
+	"--um":      "--um",
+	"-port":     "--port",
+	"--port":    "--port",
+	"-timeout":  "--timeout",
+	"--timeout": "--timeout",
 }
 
 func main() {
@@ -52,7 +52,7 @@ func main() {
 		helpFlag    bool
 		versionFlag bool
 		execFlag    string
-		execFile    string
+		umFlag      string
 		execPort    int
 		execTimeout int
 		configFlag  string
@@ -68,7 +68,7 @@ func main() {
 	flag.BoolVar(&helpFlag, "help", false, "显示帮助信息")
 	flag.BoolVar(&versionFlag, "version", false, "显示版本信息")
 	flag.StringVar(&execFlag, "exec", "", "指令执行模式：Shell脚本字符串")
-	flag.StringVar(&execFile, "exec-file", "", "指令执行模式：Shell脚本文件路径")
+	flag.StringVar(&umFlag, "um", "false", "指令执行模式：是否对 --exec 参数值进行解密（t/true 启用，忽略大小写）")
 	flag.IntVar(&execPort, "port", 9092, "指令执行模式：目标HTTP服务端口（发送请求到 127.0.0.1:port）")
 	flag.IntVar(&execTimeout, "timeout", 0, "指令执行模式：执行超时秒数（默认使用服务端 DefaultExecTimeout=60）")
 	flag.StringVar(&configFlag, "config", myconstant.DefaultConfigPath, "HTTP服务模式：配置文件路径（相对路径基于可执行文件目录）")
@@ -89,15 +89,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	// ========== --exec 与 --exec-file 互斥校验 ==========
-	if execFlag != "" && execFile != "" {
-		fmt.Fprintln(os.Stderr, "错误：--exec 和 --exec-file 不能同时使用")
-		printUsage()
-		os.Exit(1)
-	}
-
 	// ========== 模式判定 ==========
-	isExecMode := execFlag != "" || execFile != ""
+	isExecMode := execFlag != ""
 
 	// ========== 模式互斥校验（双向检测） ==========
 	// 检测1：指令模式里混入 HTTP 参数（原逻辑）
@@ -122,7 +115,8 @@ func main() {
 
 	// ========== 指令执行模式 ==========
 	if isExecMode {
-		os.Exit(runExecMode(execFlag, execFile, args, execPort, execTimeout))
+		umEnabled := strings.EqualFold(umFlag, "t") || strings.EqualFold(umFlag, "true")
+		os.Exit(runExecMode(execFlag, umEnabled, args, execPort, execTimeout))
 	}
 
 	// ========== HTTP服务模式 ==========
@@ -145,7 +139,7 @@ func detectExplicitHTTPFlags(args []string) []string {
 	return found
 }
 
-// detectExplicitExecFlags 检测命令行中是否显式传入了指令模式参数（--exec/--exec-file/--port/--timeout）
+// detectExplicitExecFlags 检测命令行中是否显式传入了指令模式参数（--exec/--um/--port/--timeout）
 // 用于 HTTP 模式下拦截混入的指令参数
 func detectExplicitExecFlags(args []string) []string {
 	var found []string
@@ -165,7 +159,8 @@ func detectExplicitExecFlags(args []string) []string {
 // 不加载任何配置文件，不启动 HTTP 服务，不初始化日志；
 // 组装 HTTP POST 请求，向已运行的本地 MetricAgent 服务发 AES 加密请求；
 // 执行完成后根据响应中的 exit_code 直接退出
-func runExecMode(execScript string, execFile string, args []string, port int, timeoutSec int) int {
+// umEnabled=true 时，先对 execScript 做凯撒密码解密（字母向前-1），再 AES 加密发送
+func runExecMode(execScript string, umEnabled bool, args []string, port int, timeoutSec int) int {
 	// ========== 客户端参数校验 ==========
 	if port <= 0 || port > 65535 {
 		fmt.Fprintf(os.Stderr, "错误：--port 参数值 %d 不合法，有效范围 1-65535\n", port)
@@ -189,20 +184,11 @@ func runExecMode(execScript string, execFile string, args []string, port int, ti
 	}
 
 	// ========== 解析脚本内容 ==========
-	var script string
-	if execScript != "" {
-		script = execScript
-	} else if execFile != "" {
-		resolvedPath := bootstrap.BootstrapPath(execFile)
-		data, err := os.ReadFile(resolvedPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "错误：读取脚本文件失败 %v\n", err)
-			return 1
-		}
-		script = string(data)
-	} else {
-		fmt.Fprintln(os.Stderr, "错误：未提供脚本内容（--exec 或 --exec-file）")
-		return 1
+	script := execScript
+
+	// ========== 凯撒密码解密（--um=true 时启用） ==========
+	if umEnabled {
+		script = caesarDecrypt(script)
 	}
 
 	// ========== 组装 HTTP 请求 ==========
@@ -311,6 +297,25 @@ func runExecMode(execScript string, execFile string, args []string, port int, ti
 		return 1
 	}
 	return execResp.ExitCode
+}
+
+// caesarDecrypt 凯撒密码解密（PRD 2.2）
+// 规则：对26个英文字母向前偏移1位
+//   - 大写 A-Z：每个字母 -1，A → Z
+//   - 小写 a-z：每个字母 -1，a → z
+//   - 大小写独立处理，不跨大小写转换
+//   - 非 A-Z 和 a-z 的所有字符原样保留
+func caesarDecrypt(input string) string {
+	runes := []rune(input)
+	for i, r := range runes {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			runes[i] = 'A' + (r-'A'-1+26)%26
+		case r >= 'a' && r <= 'z':
+			runes[i] = 'a' + (r-'a'-1+26)%26
+		}
+	}
+	return string(runes)
 }
 
 // runHTTPMode HTTP服务模式
@@ -439,7 +444,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("指令执行模式参数（一次性执行后退出）:")
 	fmt.Println("  --exec string        Shell脚本字符串")
-	fmt.Println("  --exec-file string   Shell脚本文件路径（相对路径基于可执行文件目录）")
+	fmt.Println("  --um string          是否对 --exec 参数值进行凯撒密码解密（值为 t/true 启用，忽略大小写；推荐 --um=true 或 --um=t）")
 	fmt.Println("  --port int           目标HTTP服务端口 (default 9092)")
 	fmt.Println("  --timeout int        执行超时秒数 (default 60，上限 1800)")
 	fmt.Println("  --                   分隔符，其后内容作为脚本参数传递（含空格参数不丢失语义）")
@@ -458,8 +463,8 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("业务规则:")
 	fmt.Println("  1. 指令模式与HTTP模式参数互斥，同时传入两类参数直接报错")
-	fmt.Println("  2. --exec 与 --exec-file 互斥，只能使用其中一个")
-	fmt.Println("  3. 指令模式向本地 MetricAgent HTTP 服务发 AES 加密请求，请求体和返回值均使用 AES 加解密传输")
+	fmt.Println("  2. 指令模式向本地 MetricAgent HTTP 服务发 AES 加密请求，请求体和返回值均使用 AES 加解密传输")
+	fmt.Println("  3. --um=true 时，先对 --exec 参数值做凯撒密码解密（字母向前偏移1位：B→A，A→Z），再 AES 加密发送")
 	fmt.Println("  4. --help 与其他参数同时出现时仅输出帮助并退出")
 	fmt.Println()
 	fmt.Println("示例:")
@@ -469,8 +474,11 @@ func printUsage() {
 	fmt.Println("  # 指令模式 - 直接执行脚本字符串（向 127.0.0.1:9092 发请求）")
 	fmt.Println("  metric-agent --exec 'echo \"hello world\"'")
 	fmt.Println()
-	fmt.Println("  # 指令模式 - 指定端口、执行脚本文件并传参（含空格参数正确传递）")
-	fmt.Println("  metric-agent --exec-file ./script.sh --port 9092 --timeout 30 -- arg1 '/some/path with spaces' arg2")
+	fmt.Println("  # 指令模式 - 使用 --um 解密后再执行")
+	fmt.Println("  metric-agent --um true --exec 'abcd'   # 凯撒解密后为 'zabc'（每个字母向前-1）")
+	fmt.Println()
+	fmt.Println("  # 指令模式 - 指定端口、超时并传参（含空格参数正确传递）")
+	fmt.Println("  metric-agent --exec 'echo' --port 9092 --timeout 30 -- arg1 '/some/path with spaces' arg2")
 }
 
 // probeBind 尝试对给定地址做一次 TCP bind，返回 nil 表示端口可用

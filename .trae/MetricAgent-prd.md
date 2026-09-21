@@ -48,27 +48,39 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
 ### 2.2、指令执行模式
 
-**需求描述：** 一次性执行脚本，执行完成后进程直接退出。该模式不加载任何配置文件，不启动 HTTP 服务，也不加密，所有执行脚本参数均通过 命令行传入，参数 --exec，返回指令标准输出，指令执行失败返回错误信息。
+**需求描述：** 一次性执行脚本，执行完成后进程直接退出。该模式不加载任何配置文件，不启动 HTTP 服务，所有执行脚本参数均通过 命令行传入，参数 --exec，返回指令标准输出，指令执行失败返回错误信息。
 
 **业务规则：**
 
-* 指令执行模式仅支持 --exec、--target参数，不支持 --config、--bind-addr 等 HTTP 模式参数；同时传入两类参数时启动直接报错。
+* 指令执行模式仅支持 --exec、--um、--port、--timeout参数，不支持 --config、--bind-addr 等 HTTP 模式参数；同时传入两类参数时启动直接报错。
 
-* --exec 参数值作为完整 shell 脚本字符串传入。若脚本包含空格、引号等特殊字符，推荐使用 --exec-file 参数指定脚本文件路径（该文件内容作为脚本执行）。
+* --exec 参数值作为完整 shell 脚本字符串传入。
+
+* --um  对--exec参数值进行解密，um=t/true 时启用（忽略大小写，非t/true都表示不解密），表示--exec 输入的是密文，需要先解密再用aes加密，默认值false（表示不解密）
 
 * --port 参数值指定端口，不传使用默认值9092。
 
 * --timeout 参数值指定超时时间，不传默认60秒，单位秒。
 
-* 接收到--exec和--port，组装HTTP POST请求，向[http\://127.0.0.1:port/api/v1/exec，](http://127.0.0.1:port/api/v1/exec，)消息体：  
+* 接收到--exec和--port，根据--um处理是否对--exec参数值解密，之后组装HTTP POST请求，向[http\://127.0.0.1:port/api/v1/exec，](http://127.0.0.1:port/api/v1/exec，)消息体：  
   {  
-  "script": --exec 参数值,  
+  "script": --exec 参数值（已根据--um处理）,  
   "timeout": --timeout参数值  
-  }，消息体使用aes加密模块加密，接口返回值使用aes模块解密，密钥使用7sK9p2R5zG8tB4vN1qX6dF3hJ7cM0aS2
+  }，消息体使用aes加密模块加密，接口返回值使用aes模块解密，密钥使用7sK9p2R5zG8tB4vN
 
 * 指令执行模式使用当前系统用户权限运行，工作目录为当前目录，执行完成后进程退出，退出码 0 表示成功，非 0 表示失败。
 
 * --help 参数优先级最高，与其他参数同时出现时仅输出帮助并退出。
+
+解密规则：
+
+* 使用<span style="color:rgb(51, 51, 51)">恺</span>*<span style="color:rgb(247, 49, 49)">撒密码解密，对26个英文字母进行向前一位取值，比如B转换为A，abcd转换为zabc，xYza转换为wXyz</span>*。
+* 凯撒向前偏移1位逻辑 
+
+  * 1. 大写字母范围A-Z，每个字母向前-1；大写A向前偏移1，回卷到Z
+  * 2. 小写字母范围a-z，每个字母向前-1；小写a向前偏移1，回卷到z
+  * 3. 大小写两套字母独立处理，不能跨大小写转换 
+  * 4. 非 A-Z 和 a-z 的所有字符都原样保留，不做偏移变换
 
 ## 三、详细功能需求
 
@@ -141,8 +153,8 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 * 定时任务锁增加超时时间10分钟，超时自动解锁；
 
   ```
-  个性化配置清单dataId拼接规则：metricFileConfig_{agent.group}_{agent.id}
-  公共配置清单dataId拼接规则：metricFileConfig_{agent.group}
+  个性化配置清单dataId拼接规则：metricFileConfig_{agent.id}
+  公共配置清单dataId拼接规则：metricFileConfig
   ```
 
 
@@ -195,7 +207,7 @@ Suffix string //suffix
 ConfigCode string  
 StorePath string // 原始storePath（已自动补全路径分隔符）  
 FinalName string // 计算后的最终文件名  
-ReFileName string      
+ReFileName string  
 }  
 // 监听注册表  
 type ListenRegistry struct {  

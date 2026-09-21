@@ -519,8 +519,8 @@ Step 2: 指令模式执行脚本（向已运行的服务发 AES 加密请求）
 
 | 参数            | 类型     | 默认值            | 说明                                                  |
 | ------------- | ------ | -------------- | --------------------------------------------------- |
-| `--exec`      | string | 空              | 脚本内容（与 `--exec-file` 互斥）                            |
-| `--exec-file` | string | 空              | 脚本文件路径（相对路径基于可执行文件目录，与 `--exec` 互斥）                 |
+| `--exec`      | string | 空              | Shell 脚本字符串（指令执行模式专属）                              |
+| `--um`        | string | `false`        | 是否对 `--exec` 值先做凯撒密码解密，`t/true`（忽略大小写）启用，其余值不解密    |
 | `--port`      | int    | `9092`         | 目标 HTTP 服务端口                                        |
 | `--timeout`   | int    | `0`（服务端默认 60s） | 执行超时秒数；**客户端上限 1800s**，服务端最终拦截 600s；≤0 或 >1800 直接报错 |
 | `--`          | 分隔符    | —              | 之后所有内容作为脚本参数传递，**保留空格语义**                           |
@@ -530,7 +530,6 @@ Step 2: 指令模式执行脚本（向已运行的服务发 AES 加密请求）
 
 | 规则                          | 错误示例                                                    | 结果                            |
 | --------------------------- | ------------------------------------------------------- | ----------------------------- |
-| `--exec` 与 `--exec-file` 互斥 | `metric-agent --exec 'echo' --exec-file test.sh`        | 报错退出                          |
 | 指令模式参数与 HTTP 模式参数互斥         | `metric-agent --exec 'echo' --config ./metricAgent.yml` | 报错退出                          |
 | HTTP 模式参数与指令模式参数互斥          | `metric-agent --config ./metricAgent.yml --exec 'echo'` | 报错退出（提示需先传入 `--exec` 才进入指令模式） |
 | `--help` 与其他参数同时出现          | `metric-agent --help --exec 'echo'`                     | 仅输出帮助并退出                      |
@@ -553,8 +552,9 @@ metric-agent --config ./metricAgent.yml
 # 2. 指令模式 - 脚本字符串（向 127.0.0.1:9092 发 AES 加密请求）
 metric-agent --exec 'echo "hello world"'
 
-# 3. 指令模式 - 脚本文件（相对路径基于可执行文件目录）
-metric-agent --exec-file ./scripts/health-check.sh
+# 3. 指令模式 - 使用 --um 凯撒解密后执行
+#    字母向前-1：abcd → zabc，xYza → wXyz
+metric-agent --um true --exec 'abcd'
 
 # 4. 指令模式 - 指定端口、超时
 metric-agent --exec 'curl -s http://localhost:8428/api/v1/query?query=up' \
@@ -563,7 +563,7 @@ metric-agent --exec 'curl -s http://localhost:8428/api/v1/query?query=up' \
 
 # 5. 指令模式 - 带参数（含空格参数不丢失语义）
 #    -- 分隔符之后的内容原样传给脚本，shell 内通过 $@ 或 $1 $2 引用
-metric-agent --exec-file ./deploy.sh -- \
+metric-agent --exec 'echo' -- \
   "production env" \
   "/data/backup with spaces" \
   arg3
@@ -578,12 +578,10 @@ metric-agent --help
 | 错误信息                                      | 原因                          | 解决方法                                                 |
 | ----------------------------------------- | --------------------------- | ---------------------------------------------------- |
 | `无法连接到本地 MetricAgent 服务 (127.0.0.1:9092)` | HTTP 服务未启动或端口不对             | 先启动 HTTP 服务，或用 `--port` 指定正确端口                       |
-| `--exec 和 --exec-file 不能同时使用`             | 互斥参数同时传入                    | 二选一                                                  |
 | `HTTP 400` + `脚本内容不能为空`                   | `--exec` 传入了空字符串或全空白        | 检查脚本内容                                               |
 | `HTTP 400` + `超时时间非法`                     | `--timeout` 值 ≤0 或 >600     | 改为 1~1800 之间的整数                                      |
 | `--timeout 参数值 X 超出客户端上限 1800`            | 客户端提前拦截了超限请求                | 改为 ≤1800 的值                                          |
 | `请求体AES加密失败` / `响应体AES解密失败`               | AES 密钥不匹配                   | 确认 YAML 中 `shell.encrypt.key` 与客户端默认密钥一致（服务端启动日志会提示） |
-| `读取脚本文件失败`                                | `--exec-file` 指定的路径不存在或无法读取 | 检查文件路径（相对路径基于可执行文件目录）                                |
 
 ---
 
