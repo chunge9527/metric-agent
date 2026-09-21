@@ -377,7 +377,7 @@ curl -X POST -H "Authentication: your-auth-key" \
 | **鉴权**       | ❌ 跳过（与 `/health`、`/api/v1/exec` 同为免鉴权白名单） |
 | **Query 参数** | `action`：`pause` / `resume` / `status`    |
 
-> 本接口仅在 `feature.enableGuardian=true`（默认 true）时可用；若守护服务未启用，所有 action 请求均返回 **HTTP 503**。
+> 本接口仅在 `feature.enableGuardian=true`（需显式开启，未配置默认 false）时可用；若守护服务未启用，所有 action 请求均返回 **HTTP 503**。
 
 #### 1.6.1 action=status（查询守护状态）
 

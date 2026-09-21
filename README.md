@@ -146,7 +146,7 @@ agent:
   # agent.group 会自动从 nacos.group 回填，无需单独配置
   id: node-001
   
-# 服务特性总开关，true启用，false禁用；未配置时默认全部true
+# 服务特性总开关，true启用，false禁用；未配置时默认全部false（关闭），需显式 true 开启
 feature:
   # Nacos配置中心和配置变更监听开关，关闭后不初始化nacos客户端、不监听配置变更
   enableNacos: true
@@ -748,7 +748,7 @@ GET /api/v1/guardian?action=status|pause|resume
 
 1. 确认 Nacos 服务正常运行：`curl http://<nacos>:8848/nacos`
 2. 检查 `metricAgent.yml` 中 `nacos.address` 配置
-3. 确认 `feature.enableNacos: true`（默认）
+3. 确认 `feature.enableNacos: true`（需显式开启，未配置默认 false）
 4. Agent 启动后会按 `config.pullInterval` 分钟定期重试，日志中可见重连状态
 
 ### Q2: 配置分发失败怎么办？

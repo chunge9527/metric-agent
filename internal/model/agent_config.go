@@ -46,38 +46,29 @@ type AgentInfo struct {
 }
 
 // FeatureConfig 服务特性开关
-// 使用 *bool 指针类型：nil 表示未配置（回填默认值 true），false 显式禁用
+// 使用 bool 类型：Go 零值 false 即"未配置时默认关闭"，需显式 true 才开启
 type FeatureConfig struct {
-	// EnableNacos Nacos配置中心和配置变更监听开关
-	EnableNacos *bool `yaml:"enableNacos" json:"enable_nacos"`
-	// EnableGuardian 进程守护服务开关
-	EnableGuardian *bool `yaml:"enableGuardian" json:"enable_guardian"`
-	// EnableSchedule 定时任务调度服务开关
-	EnableSchedule *bool `yaml:"enableSchedule" json:"enable_schedule"`
+	// EnableNacos Nacos配置中心和配置变更监听开关（默认 false，显式 true 开启）
+	EnableNacos bool `yaml:"enableNacos" json:"enable_nacos"`
+	// EnableGuardian 进程守护服务开关（默认 false，显式 true 开启）
+	EnableGuardian bool `yaml:"enableGuardian" json:"enable_guardian"`
+	// EnableSchedule 定时任务调度服务开关（默认 false，显式 true 开启）
+	EnableSchedule bool `yaml:"enableSchedule" json:"enable_schedule"`
 }
 
-// IsNacosEnabled Nacos是否启用（未配置时默认true，保持向后兼容）
+// IsNacosEnabled Nacos是否启用
 func (f FeatureConfig) IsNacosEnabled() bool {
-	if f.EnableNacos == nil {
-		return true
-	}
-	return *f.EnableNacos
+	return f.EnableNacos
 }
 
-// IsGuardianEnabled 进程守护是否启用（未配置时默认true）
+// IsGuardianEnabled 进程守护是否启用
 func (f FeatureConfig) IsGuardianEnabled() bool {
-	if f.EnableGuardian == nil {
-		return true
-	}
-	return *f.EnableGuardian
+	return f.EnableGuardian
 }
 
-// IsScheduleEnabled 定时任务是否启用（未配置时默认true）
+// IsScheduleEnabled 定时任务是否启用
 func (f FeatureConfig) IsScheduleEnabled() bool {
-	if f.EnableSchedule == nil {
-		return true
-	}
-	return *f.EnableSchedule
+	return f.EnableSchedule
 }
 
 // NacosConfig Nacos配置

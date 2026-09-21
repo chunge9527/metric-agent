@@ -132,7 +132,7 @@ func validateConfig(cfg *model.AgentConfig) error {
 }
 
 // fillDefaults 填充默认值
-// Feature开关默认值由IsXxxEnabled方法统一处理（nil→true，保持向后兼容）
+// Feature开关使用 bool 零值（false），未配置即默认关闭，无需回填
 func fillDefaults(cfg *model.AgentConfig) {
 	// nacos.group 默认值（Nacos SDK 内部默认就是 DEFAULT_GROUP）
 	if cfg.Nacos.Group == "" {
