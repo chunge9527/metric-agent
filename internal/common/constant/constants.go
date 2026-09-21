@@ -211,11 +211,11 @@ const HeaderAuth = "Authentication"
 // ============ 配置标识 ============
 
 // ConfigListPersonalDataIDFormat 个性化配置清单dataId格式（PRD 3.2.1）
-// 格式：metricFileConfig_{agent.group}_{agent.id}，参数顺序：group, id
-const ConfigListPersonalDataIDFormat = "metricFileConfig_%s_%s"
+// 格式：metricFileConfig_{agent.id}，参数顺序：id
+const ConfigListPersonalDataIDFormat = "metricFileConfig_%s"
 
-// ConfigListPublicDataIDFormat 公共配置清单dataId格式（PRD 3.2.1）
-// 格式：metricFileConfig_{agent.group}，参数顺序：group
-const ConfigListPublicDataIDFormat = "metricFileConfig_%s"
+// ConfigListPublicDataID 公共配置清单dataId（PRD 3.2.1）
+// 格式：metricFileConfig（固定值，不再拼接 agent.group）
+const ConfigListPublicDataID = "metricFileConfig"
 
 // ============ 时间常量 ============

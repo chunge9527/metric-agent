@@ -31,7 +31,7 @@ var configCodePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 type ConfigServiceParams struct {
 	// AgentID 节点唯一标识
 	AgentID string
-	// AgentGroup 节点分组（用于拼配置清单 dataId）
+	// AgentGroup 节点分组（保留字段，health API 等场景使用）
 	AgentGroup string
 	// Namespace Nacos 命名空间
 	Namespace string
@@ -163,8 +163,8 @@ func NewConfigService(cc iface.ConfigCenter, se iface.ShellExecutor, p ConfigSer
 //
 // 配置清单本身不注册监听，采用定时拉取（PRD L157）
 func (s *ConfigService) LoadConfigList() (*configListResult, error) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, s.params.AgentGroup, s.params.AgentID)
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, s.params.AgentGroup)
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, s.params.AgentID)
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	// 阶段1：独立拉取两份，各自处理失败
 	personalList, personalOK := s.tryParseList(personalDataID, "personal")

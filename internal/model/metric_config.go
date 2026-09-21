@@ -1,6 +1,6 @@
 package model
 
-// MetricConfig 二级配置清单项，对应 Nacos 配置清单（metricFileConfig_{agent.group}_{agent.id} 或 metricFileConfig_{agent.group}）中的单条配置
+// MetricConfig 二级配置清单项，对应 Nacos 配置清单（metricFileConfig_{agent.id} 或 metricFileConfig）中的单条配置
 type MetricConfig struct {
 	// ConfigCode 配置项编号，必填，仅允许字母、数字、下划线、横线（PRD 3.2.2）
 	// 用于 MetricConfig 原始条目层按 configCode 去重和跨清单合并优先级判定

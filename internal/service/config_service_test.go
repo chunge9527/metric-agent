@@ -340,8 +340,8 @@ func TestItemKey(t *testing.T) {
 
 // TestLoadConfigList_BothOK_NoOverlap 个性化和公共都成功拉取、configCode 无重叠 → 合并后数量正确
 func TestLoadConfigList_BothOK_NoOverlap(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -385,8 +385,8 @@ func TestLoadConfigList_BothOK_NoOverlap(t *testing.T) {
 
 // TestLoadConfigList_BothOK_OverlapByConfigCode 个性化和公共都成功 + 同 configCode → 只保留个性化（优先级高）
 func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -450,8 +450,8 @@ func TestLoadConfigList_BothOK_OverlapByConfigCode(t *testing.T) {
 
 // TestLoadConfigList_PersonalOK_PublicFail 个性化成功 + 公共失败 → 只用个性化
 func TestLoadConfigList_PersonalOK_PublicFail(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -488,8 +488,8 @@ func TestLoadConfigList_PersonalOK_PublicFail(t *testing.T) {
 // TestLoadConfigList_PersonalFail_PublicOK 个性化失败 + 公共成功 → 只用公共（两者都被尝试拉取）
 func TestLoadConfigList_PersonalFail_PublicOK(t *testing.T) {
 	callOrder := []string{}
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -543,8 +543,8 @@ func TestLoadConfigList_AllFailed(t *testing.T) {
 
 // TestLoadConfigList_PersonalEmpty_PublicOK 个性化空内容 + 公共成功 → 只用公共
 func TestLoadConfigList_PersonalEmpty_PublicOK(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -575,8 +575,8 @@ func TestLoadConfigList_PersonalEmpty_PublicOK(t *testing.T) {
 
 // TestLoadConfigList_PersonalEmptyArray_PublicOK 个性化空数组 + 公共成功 → 只用公共
 func TestLoadConfigList_PersonalEmptyArray_PublicOK(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -621,8 +621,8 @@ func TestLoadConfigList_InvalidYAML(t *testing.T) {
 
 // TestLoadConfigList_PersonalInternalDedup 个性化内部有重复 configCode → 先配置先生效去重
 func TestLoadConfigList_PersonalInternalDedup(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -673,8 +673,8 @@ func TestLoadConfigList_PersonalInternalDedup(t *testing.T) {
 
 // TestLoadConfigList_PublicInternalDedup 公共内部有重复 configCode → 先配置先生效去重
 func TestLoadConfigList_PublicInternalDedup(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -712,8 +712,8 @@ func TestLoadConfigList_PublicInternalDedup(t *testing.T) {
 
 // TestLoadConfigList_ConfigCodeEmpty 所有 configCode 都为空 → validate 阶段跳过全部条目
 func TestLoadConfigList_ConfigCodeEmpty(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {
@@ -748,8 +748,8 @@ func TestLoadConfigList_ConfigCodeEmpty(t *testing.T) {
 
 // TestLoadConfigList_ConfigCodeInvalidChars configCode 含非法字符 → 该条目被跳过
 func TestLoadConfigList_ConfigCodeInvalidChars(t *testing.T) {
-	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "AGENT_GROUP", "agent-1")
-	publicDataID := fmt.Sprintf(myconstant.ConfigListPublicDataIDFormat, "AGENT_GROUP")
+	personalDataID := fmt.Sprintf(myconstant.ConfigListPersonalDataIDFormat, "agent-1")
+	publicDataID := myconstant.ConfigListPublicDataID
 
 	cc := &mockConfigCenter{
 		getConfigFunc: func(dataId, group string) (string, error) {

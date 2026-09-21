@@ -441,9 +441,9 @@ nohup ./metric-agent --config ./metricAgent.yml --bind-addr 0.0.0.0:9092 \
 
 Agent 从 Nacos 拉取配置清单 dataId：
 
-* **个性化配置**（优先级高）：`metricFileConfig_{agent.group}_{agent.id}`
+* **个性化配置**（优先级高）：`metricFileConfig_{agent.id}`
 
-* **公共配置**（回退）：`metricFileConfig_{agent.group}`
+* **公共配置**（回退）：`metricFileConfig`
 
 在 Nacos 上创建 dataId，YAML 格式示例：
 
@@ -753,7 +753,7 @@ GET /api/v1/guardian?action=status|pause|resume
 
 ### Q2: 配置分发失败怎么办？
 
-1. 确认 Nacos 上存在 `metricFileConfig_{group}_{id}` 或 `metricFileConfig_{group}` dataId
+1. 确认 Nacos 上存在 `metricFileConfig_{id}` 或 `metricFileConfig` dataId
 2. 确认 `storePath` 目录有写入权限
 3. 确认 `reloadScript` 命令存在且可执行
 4. 查看日志中的详细错误信息
@@ -837,7 +837,7 @@ metric-agent/
 │   ├── metricAgent.yml         # 主配置文件（部署时修改）
 │   ├── crontab.yml             # 进程守护配置
 │   ├── scheduledConfig.yml     # 定时任务配置
-│   └── metricFileConfig_group.yml  # Nacos 公共配置清单示例
+│   └── metricFileConfig.yml      # Nacos 公共配置清单示例
 ├── internal/
 │   ├── bootstrap/               # 启动引导
 │   │   ├── bootstrap.go         # BootstrapPath 路径解析
