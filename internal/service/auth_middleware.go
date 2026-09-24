@@ -14,6 +14,7 @@ import (
 // 从请求头读取Authentication和CIB-AUTHORIZATION，与authKey进行大小写敏感精确匹配。
 // 路径白名单：
 //   - /health    健康检查，探针需免鉴权访问
+//   - /metrics   Prometheus metrics 暴露，scrape 端需免鉴权访问
 //   - /api/v1/exec 指令执行，ExecHandler 自带 AES 应用层加密保护，
 //     知道密钥才能构造有效请求，安全边界在应用层而非 HTTP 头；
 //     同时 runExecMode 指令执行模式不加载配置文件，无法获取 auth.key，也应跳过。
@@ -21,8 +22,8 @@ import (
 //     支持 GET ?action=pause / resume / status 三种操作
 func AuthMiddleware(authKey string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 路径白名单：健康检查和指令执行跳过鉴权
-		if r.URL.Path == myconstant.RouteHealth || r.URL.Path == myconstant.RouteExec || r.URL.Path == myconstant.RouteGuardianControl {
+		// 路径白名单：健康检查、Prometheus metrics、指令执行、守护控制跳过鉴权
+		if r.URL.Path == myconstant.RouteHealth || r.URL.Path == myconstant.RouteMetrics || r.URL.Path == myconstant.RouteExec || r.URL.Path == myconstant.RouteGuardianControl {
 			next.ServeHTTP(w, r)
 			return
 		}

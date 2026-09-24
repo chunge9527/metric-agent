@@ -10,7 +10,7 @@
 | ------- | ---------------------------------------------------------- |
 | 基础 URL  | `http://{host}:{port}`，默认端口 **9092**，默认绑定 **0.0.0.0:9092** |
 | 鉴权方式    | 请求头 `Authentication`，值为配置文件中的 `auth.key`，大小写敏感精确匹配         |
-| 鉴权白名单   | `/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护）                        |
+| 鉴权白名单   | `/health` / `/metrics` / `/api/v1/guardian` 跳过鉴权；`/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护） |
 | 请求体大小限制 | 所有接口 10MB（除 `/api/v1/upload` 另受文件大小限制）                     |
 | 默认超时    | 连接读写 30s，空闲 120s；命令执行最长 600s；请求透传最长 120s                   |
 
@@ -37,7 +37,7 @@
 | ------------ | ----------------------- |
 | **Method**   | `GET`                   |
 | **URL**      | `/health`               |
-| **鉴权**       | ✅ 不需要（`Authentication`） |
+| **鉴权**       | ✅ 不需要 |
 | **Query 参数** | 无                       |
 | **请求体**      | 无                       |
 
@@ -64,7 +64,7 @@
 **cURL 示例**：
 
 ```bash
-curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/health
+curl -H http://127.0.0.1:9092/health
 ```
 
 
@@ -484,6 +484,193 @@ curl http://127.0.0.1:9092/api/v1/guardian?action=pause
 curl http://127.0.0.1:9092/api/v1/guardian?action=resume
 ```
 
+
+---
+
+### 1.7 Prometheus Metrics 指标暴露
+
+| 项目               | 说明                                                                |
+| ---------------- | ----------------------------------------------------------------- |
+| **Method**       | `GET`                                                             |
+| **URL**          | `/metrics`                                                        |
+| **Content-Type** | `text/plain; version=0.0.4; charset=utf-8`（Prometheus 文本格式）          |
+| **鉴权**           | ❌ 跳过（鉴权白名单路径，Prometheus scrape 无需携带认证头）                          |
+| **启用条件**       | 仅 HTTP 服务模式启用；`--exec` 指令执行模式**不暴露**本接口，default registry 中无任何指标 |
+| **暴露方式**       | 复用 `promhttp.Handler()`，Prometheus Server 直接 scrape 即可                          |
+
+> **说明**：本接口按 Prometheus 官方 exposition format 输出文本格式指标，包含 `promhttp` 默认的 Go runtime 指标（`go_*`、`process_*`）以及 MetricAgent 业务自定义指标。`/metrics` 在鉴权白名单中，scrape 端可直接无认证访问。
+
+#### 1.7.1 cURL 示例
+
+```bash
+# Prometheus Server scrape 配置示例（prometheus.yml）
+# scrape_configs:
+#   - job_name: metric-agent
+#     static_configs:
+#       - targets: ['127.0.0.1:9092']
+#     params:
+#       auth: ['your-auth-key']   # 或通过 relabel_configs 设置 header
+
+# 手动 cURL 查看当前指标（无需鉴权）
+curl http://127.0.0.1:9092/metrics
+```
+
+#### 1.7.2 指标总览
+
+共 **7 个** 自定义业务指标，前缀统一为 `metricagent_`：
+
+| # | 指标名 | 类型 | 标签数 | 归属模块 |
+| --- | --- | --- | --- | --- |
+| 1 | `metricagent_build_info` | Gauge | 3 | 组件元数据 |
+| 2 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
+| 3 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
+| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
+| 5 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
+| 6 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
+| 7 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
+
+> **关于 `agent_id` / `agent_group` / `agent_version` 标签**：PRD 规定这三个标签**仅在 `metricagent_build_info` 中携带**，其他业务指标不需要重复携带——多实例版本识别、故障溯源统一通过 `build_info` 完成。
+
+#### 1.7.3 指标详细说明
+
+##### ① `metricagent_build_info`（Gauge，固定值 1）
+
+Agent 程序构建版本信息，HTTP 服务启动时设置，指标值恒为 1，通过标签携带全部元数据。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `agent_id` | 配置文件 `agent.id` | 节点唯一标识 |
+| `agent_group` | 配置文件 `agent.group` | 节点分组（Nacos group） |
+| `agent_version` | 构建注入版本号 | 应用版本（如 `0.0.1`） |
+
+**PromQL 查询示例**：
+```promql
+# 查看当前所有 MetricAgent 实例的版本
+metricagent_build_info
+
+# 按 agent_version 统计实例数
+sum by (agent_version) (metricagent_build_info)
+```
+
+##### ② `metricagent_config_list_pull_total`（Counter）
+
+配置清单拉取总次数，覆盖网络拉取、YAML 解析、空结果**全分支**（Counter 必须在所有路径 Inc，不能只在成功分支计数）。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `config_type` | `personal` / `public` | 个性化配置清单 / 公共配置清单，两次独立拉取动作 |
+| `result` | `success` / `fail_pull` / `fail_parse` / `result_empty` | 拉取成功 / 网络层失败 / YAML 解析失败 / 拉取成功但内容为空或解析结果为空数组 |
+
+**PromQL 查询示例**：
+```promql
+# 最近 5 分钟公共配置清单拉取失败率
+rate(metricagent_config_list_pull_total{config_type="public", result!="success"}[5m])
+/
+rate(metricagent_config_list_pull_total{config_type="public"}[5m])
+
+# 按 config_type + result 分组的拉取次数矩阵
+sum by (config_type, result) (rate(metricagent_config_list_pull_total[5m]))
+```
+
+##### ③ `metricagent_config_item_distribute_total`（Counter）
+
+二级配置分发处理总次数。触发时机：
+- 定时拉取循环中 `DistributeAllConfigs` 对每条二级配置的处理
+- Nacos 配置变更监听回调 `handleListenerCallback` 中的分发处理
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `result` | `success` / `fail` / `skipped` | 分发成功（拉取+写文件+重载脚本+注册监听全成功） / 分发失败（任一步骤失败） / 已存在于注册表跳过 |
+
+**PromQL 查询示例**：
+```promql
+# 配置分发成功率
+rate(metricagent_config_item_distribute_total{result="success"}[5m])
+/
+rate(metricagent_config_item_distribute_total[5m])
+```
+
+##### ④ `metricagent_config_item_distribute_duration_seconds`（Histogram）
+
+单条二级配置完整分发流程总耗时分布。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `result` | `success` / `fail` / `skipped` | 与 ③ 同标签；`skipped` 场景耗时固定记 0 |
+
+**PromQL 查询示例**：
+```promql
+# 二级配置分发 P99 耗时（成功分支）
+histogram_quantile(0.99,
+  rate(metricagent_config_item_distribute_duration_seconds_bucket{result="success"}[5m])
+)
+
+# 分发耗时分布直方图（失败 vs 成功）
+histogram_quantile(0.5,
+  sum by (le, result) (rate(metricagent_config_item_distribute_duration_seconds_bucket[5m]))
+)
+```
+
+##### ⑤ `metricagent_config_clean_trigger_total`（Counter）
+
+配置清理触发次数。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `result` | `success` / `skipped_high_risk` | 清理正常执行 / storePath 命中高危目录黑名单跳过 |
+
+**PromQL 查询示例**：
+```promql
+# 配置清理被高危目录拦截的次数
+sum(rate(metricagent_config_clean_trigger_total{result="skipped_high_risk"}[5m]))
+```
+
+##### ⑥ `metricagent_guardian_self_heal_total`（Counter）
+
+组件自愈执行次数（processTarget 中健康检查失败后触发自愈时计数）。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `component_name` | 守护配置中的组件名 | 按组件维度统计 |
+| `heal_result` | `success` / `fail` / `interrupted` | 启动脚本执行结果：成功 / 执行异常或非零退出码 / 被停止信号中断 |
+| `health_result` | `success` / `fail` / `interrupted` | 拉起后健康检查结果：成功 / 执行异常或非零退出码 / 被停止信号中断 |
+
+> **注意**：`heal_result` 和 `health_result` 是**独立标签**，`heal_result=success` 但 `health_result=fail` 表示"启动脚本成功拉起但健康检查仍不过"——这是最需要告警的自愈场景。
+
+**PromQL 查询示例**：
+```promql
+# 组件自愈成功率（heal_result + health_result 都为 success）
+sum by (component_name) (
+  rate(metricagent_guardian_self_heal_total{heal_result="success", health_result="success"}[5m])
+)
+/
+sum by (component_name) (
+  rate(metricagent_guardian_self_heal_total[5m])
+)
+
+# 告警：启动成功但健康检查仍失败（最需要关注）
+metricagent_guardian_self_heal_total{heal_result="success", health_result="fail"}
+> metricagent_guardian_self_heal_total offset 5m
+```
+
+##### ⑦ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
+
+组件自愈全流程总耗时分布（启动脚本执行 + 拉起后健康检查）。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `component_name` | 守护配置中的组件名 | 按组件维度统计耗时 |
+| `result` | `success` / `fail` / `interrupted` | 自愈整体结果 |
+
+**PromQL 查询示例**：
+```promql
+# 按组件名的自愈 P95 耗时
+histogram_quantile(0.95,
+  sum by (le, component_name) (
+    rate(metricagent_guardian_self_heal_duration_seconds_bucket[5m])
+  )
+)
+```
 
 ---
 

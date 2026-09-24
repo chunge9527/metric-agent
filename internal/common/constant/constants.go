@@ -1,6 +1,18 @@
 // Package constant 全局常量与默认值定义
 package constant
 
+// ============ 版本信息 ============
+
+// AppVersion 应用版本号，通过 -ldflags 注入构建时版本
+// 构建命令示例：
+//
+//	go build -ldflags="-X metric-agent/internal/common/constant.AppVersion=20260903-gitabc123"
+//
+// 未注入时使用默认值 "dev"
+// 不要用注入版本，直接在代码中修改此变量，避免版本号不一致
+// 埋点需要埋版本号
+var AppVersion = "0.0.1"
+
 // ============ 路径与地址配置 ============
 
 // DefaultBindAddr 默认HTTP监听地址
@@ -134,16 +146,6 @@ var DefaultCleanSuffixes = []string{".yml", ".yaml"}
 // storePath 命中即跳过，不做任何删除动作
 var DefaultConfigCleanBlacklist = []string{"/etc", "/bin", "/sbin", "/usr/bin"}
 
-// ============ 版本信息 ============
-
-// AppVersion 应用版本号，通过 -ldflags 注入构建时版本
-// 构建命令示例：
-//
-//	go build -ldflags="-X metric-agent/internal/common/constant.AppVersion=20260903-gitabc123"
-//
-// 未注入时使用默认值 "dev"
-var AppVersion = "v0.0.1"
-
 // ============ 模式标识 ============
 
 // ============ HTTP 路由 ============
@@ -163,6 +165,9 @@ const RouteUpload = "/api/v1/upload"
 // RouteGuardianControl 进程守护控制接口路径
 // 支持 GET ?action=pause / resume / status 三种操作
 const RouteGuardianControl = "/api/v1/guardian"
+
+// RouteMetrics Prometheus metrics 暴露路径（PRD 硬性约束）
+const RouteMetrics = "/metrics"
 
 // ============ 文件上传配置（PRD 3.8） ============
 

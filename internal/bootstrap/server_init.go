@@ -13,8 +13,11 @@ import (
 	"metric-agent/internal/infra/iface"
 	"metric-agent/internal/infra/nacos_client"
 	"metric-agent/internal/infra/shell_exec"
+	"metric-agent/internal/metrics"
 	"metric-agent/internal/model"
 	"metric-agent/internal/service"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // InitServer 初始化HTTP服务，返回HTTP Server、清理函数和错误
@@ -193,6 +196,14 @@ func InitServer(cfg *model.AgentConfig, bindAddr string) (*http.Server, func(), 
 
 	// ========== HTTP路由注册 ==========
 	mux := http.NewServeMux()
+
+	// ========== Prometheus Metrics（PRD 6 + prompts 硬性约束） ==========
+	// 显式注册全部指标到 default registry（仅 HTTP 模式调用；--exec 指令模式不调用）
+	metrics.EnableMetrics()
+	// 初始化 build_info 指标，值恒为1，标签携带元数据
+	metrics.BuildInfoLabelsSet(cfg.Agent.ID, cfg.Agent.Group, myconstant.AppVersion)
+	// 注册 /metrics 暴露接口
+	mux.Handle(myconstant.RouteMetrics, promhttp.Handler())
 
 	// 健康检查
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

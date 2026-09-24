@@ -19,8 +19,10 @@ import (
 	"metric-agent/internal/common/filekit"
 	"metric-agent/internal/common/logger"
 	"metric-agent/internal/infra/iface"
+	"metric-agent/internal/metrics"
 	"metric-agent/internal/model"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -271,25 +273,35 @@ func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigL
 	content, err := s.cc.GetConfig(dataID, s.params.NacosGroup)
 	if err != nil {
 		logger.Warn("配置清单拉取失败", "source", source, "dataId", dataID, "error", err)
+		// PRD 6.2.1，指标语义：配置清单拉取失败（网络层）
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "fail_pull"}).Inc()
 		return nil, false
 	}
 	if strings.TrimSpace(content) == "" {
 		logger.Warn("配置清单内容为空，视为失败", "source", source, "dataId", dataID)
+		// PRD 6.2.1，指标语义：拉取成功但内容为空
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "result_empty"}).Inc()
 		return nil, false
 	}
 
 	var configs model.MetricConfigList
 	if err := yaml.Unmarshal([]byte(content), &configs); err != nil {
 		logger.Error("配置清单解析失败", "source", source, "dataId", dataID, "error", err)
+		// PRD 6.2.1，指标语义：YAML 解析异常
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "fail_parse"}).Inc()
 		return nil, false
 	}
 	// 解析结果必须是非 nil 数组，否则视为失败（PRD 3.2.2）
 	if len(configs) == 0 {
 		logger.Warn("配置清单解析结果为空数组，视为失败", "source", source, "dataId", dataID)
+		// PRD 6.2.1，指标语义：解析成功但结果为空数组
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "result_empty"}).Inc()
 		return nil, false
 	}
 
 	logger.Info("配置清单加载成功", "source", source, "dataId", dataID, "count", len(configs))
+	// PRD 6.2.1，指标语义：配置清单拉取全流程成功
+	metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "success"}).Inc()
 	return configs, true
 }
 
@@ -436,13 +448,27 @@ func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
 	for _, t := range targets {
 		if _, exists := s.registry.Get(t.itemKey()); exists {
 			// 已存在且 itemKey 完全一致 = 所有属性一致，跳过
+			// PRD 6.2.2，指标语义：已存在于注册表，跳过本次分发
+			metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": "skipped"}).Inc()
+			// PRD 6.2.2，指标语义：跳过场景耗时记为 0（用于与 success/fail 直方图对齐）
+			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": "skipped"}).Observe(0)
 			continue
 		}
+
+		// 记录二级配置分发耗时（PRD 6.2.2 Histogram）
+		start := time.Now()
+		distributeResult := "fail"
 		if s.processTarget(t) {
 			success++
+			distributeResult = "success"
 		} else {
 			failed++
 		}
+		duration := time.Since(start).Seconds()
+
+		// PRD 6.2.2，指标语义：二级配置分发处理计数 + 耗时分布
+		metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": distributeResult}).Inc()
+		metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": distributeResult}).Observe(duration)
 	}
 
 	// enableClean 触发的配置清理（失败不影响后续，PRD 3.2.3 / 3.2.4）
@@ -618,10 +644,25 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 // 使用 per-itemKey 锁串行化同一配置项的写操作（防止连续推送并发冲突）
 //
 // 加 panic recovery：防止 writeConfig/runReloadScript 内部 panic 后
-// 该 itemKey 的监听回调 goroutine 永久死亡，导致这个配置项不再自动更新
+// 该 itemKey 的监听回调 goroutine 永久死亡，导致这个配置项不再自动同步
 func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent string) {
+	// PRD 6.2.2 Prometheus 埋点：监听回调分发的计数 + 耗时（与 DistributeAllConfigs 口径一致）
+	listenerStart := time.Now()
+	var listenerResult string
+	defer func() {
+		// PRD 6.2.2，指标语义：Nacos 监听触发的二级配置分发处理计数
+		metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": listenerResult}).Inc()
+		// PRD 6.2.2，指标语义：Nacos 监听触发的分发流程耗时分布
+		if listenerResult == "skipped" {
+			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": "skipped"}).Observe(0)
+		} else {
+			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": listenerResult}).Observe(time.Since(listenerStart).Seconds())
+		}
+	}()
+
 	defer func() {
 		if r := recover(); r != nil {
+			listenerResult = "fail"
 			logger.Error("监听回调 panic 已捕获，本配置项后续变更可能不再自动同步",
 				"itemKey", t.itemKey(),
 				"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
@@ -634,6 +675,8 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	// 2) Nacos SDK CancelListener 之后仍有延迟到达的 onChange 回调。
 	// 此时放弃执行，防止旧配置闭包覆盖新文件或触发错误的 reloadScript。
 	if _, ok := s.registry.Get(t.itemKey()); !ok {
+		// PRD 6.2.2：已不在注册表，跳过处理
+		listenerResult = "skipped"
 		logger.Info("监听回调：配置已不在注册表，跳过执行（可能已被移除或属性变更）",
 			"itemKey", t.itemKey(),
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
@@ -647,17 +690,22 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 
 	finalPath := t.storePath + t.finalName
 	if newContent == "" {
+		// Nacos 通知内容为空 = 配置被删除
 		if filekit.PathExists(finalPath) {
 			if err := os.Remove(finalPath); err != nil {
+				// PRD 6.2.2：删除本地文件失败
+				listenerResult = "fail"
 				logger.Error("监听回调：配置内容为空，删除本地文件失败",
 					"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 					"storePath", t.storePath, "path", finalPath, "error", err)
 			} else {
+				listenerResult = "success"
 				logger.Info("监听回调：配置内容为空，已删除本地文件",
 					"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 					"storePath", t.storePath, "path", finalPath)
 			}
 		} else {
+			listenerResult = "success"
 			logger.Info("监听回调：配置内容为空，本地文件不存在，无需删除",
 				"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 				"storePath", t.storePath, "path", finalPath)
@@ -665,6 +713,8 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 		return
 	}
 	if err := s.writeConfig(t, newContent, finalPath); err != nil {
+		// PRD 6.2.2：writeConfig 失败
+		listenerResult = "fail"
 		logger.Error("监听回调：配置处理失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
 		return
@@ -672,6 +722,7 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	if t.reloadScript != "" {
 		s.runReloadScript(t)
 	}
+	listenerResult = "success"
 	logger.Info("监听回调：配置更新成功",
 		"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
 }
@@ -881,12 +932,17 @@ func (s *ConfigService) cleanStorePathWithDedup(storePath string, finalNames map
 func (s *ConfigService) cleanStorePath(storePath string, finalNames map[string]bool) {
 	if isHighRiskDir(storePath) {
 		logger.Warn("storePath 命中高危目录黑名单，跳过清理", "storePath", storePath)
+		// PRD 6.2.3，指标语义：配置清理触发，命中高危目录黑名单跳过
+		metrics.ConfigCleanTriggerTotal.With(prometheus.Labels{"result": "skipped_high_risk"}).Inc()
 		return
 	}
 	if !filekit.PathExists(storePath) {
 		logger.Warn("storePath 目录不存在，跳过清理", "storePath", storePath)
 		return
 	}
+
+	// PRD 6.2.3，指标语义：配置清理正常触发
+	metrics.ConfigCleanTriggerTotal.With(prometheus.Labels{"result": "success"}).Inc()
 
 	entries, err := os.ReadDir(storePath)
 	if err != nil {
