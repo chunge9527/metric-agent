@@ -838,11 +838,18 @@ log:
 ### 6.2 配置分发模块埋点（关联原PRD：3.2 配置加载全章节）
 > 业务覆盖：3.2.1 Nacos对接、3.2.2 配置清单拉取、3.2.3 二级配置分发、3.2.4 配置清理、文件落盘备份回滚、重载脚本执行
 
-#### 6.2.1 配置清单拉取指标
+#### 6.2.1 Nacos连接埋点
+| 指标名 | 类型 | 业务标签集合 | 指标语义 | 关联PRD章节 | 标签必要性说明 |
+| --- | --- | --- | --- | --- | --- |
+| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数 | result: [success, fail] | 3.2.1 Nacos对接 | 保留`result`：区分成功、失败两分支，符合全分支计数要求 |
+
+
+
+#### 6.2.2 配置清单拉取指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, result_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分网络异常、解析异常、空结果三类失败场景，便于故障定位
 
-#### 6.2.2 二级配置分发与监听指标
+#### 6.2.3 二级配置分发与监听指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `metricagent_config_item_distribute_total` | Counter | `result` | 二级配置分发处理总次数 | result: [success, fail, skipped] | 3.2.3 二级配置分发 | 保留`result`：区分成功、失败、已存在跳过三类分支，符合全分支计数要求 |
@@ -850,7 +857,7 @@ log:
 
 
 
-#### 6.2.3 配置清理指标
+#### 6.2.4 配置清理指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `metricagent_config_clean_trigger_total` | Counter | `result` | 配置清理触发次数 | result: [success, skipped_high_risk] | 3.2.4 配置清理执行约束 | 保留`result`：覆盖正常执行、命中高危目录四类分支 |

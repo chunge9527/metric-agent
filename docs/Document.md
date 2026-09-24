@@ -517,17 +517,18 @@ curl http://127.0.0.1:9092/metrics
 
 #### 1.7.2 指标总览
 
-共 **7 个** 自定义业务指标，前缀统一为 `metricagent_`：
+共 **8 个** 自定义业务指标，前缀统一为 `metricagent_`：
 
 | # | 指标名 | 类型 | 标签数 | 归属模块 |
 | --- | --- | --- | --- | --- |
 | 1 | `metricagent_build_info` | Gauge | 3 | 组件元数据 |
-| 2 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
-| 3 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
-| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
-| 5 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
-| 6 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
-| 7 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
+| 2 | `metricagent_nacos_connect_total` | Counter | 1 | 配置分发 |
+| 3 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
+| 4 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
+| 5 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
+| 6 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
+| 7 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
+| 8 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
 
 > **关于 `agent_id` / `agent_group` / `agent_version` 标签**：PRD 规定这三个标签**仅在 `metricagent_build_info` 中携带**，其他业务指标不需要重复携带——多实例版本识别、故障溯源统一通过 `build_info` 完成。
 
@@ -552,7 +553,31 @@ metricagent_build_info
 sum by (agent_version) (metricagent_build_info)
 ```
 
-##### ② `metricagent_config_list_pull_total`（Counter）
+##### ② `metricagent_nacos_connect_total`（Counter）
+
+Nacos 连接总次数。触发时机：
+- `NewNacosClient` 启动时的**初始连接**尝试
+- `reconnectLoop` 后台定时**重连**尝试（初始失败后每 60s 重试）
+- 每次调用覆盖完整 `connect()` 链路：ParseNacosAddress → probeNacosServer → NewConfigClient 全流程
+
+| 标签 | 枚举值 | 说明 |
+| --- | --- | --- |
+| `result` | `success` / `fail` | ConfigClient 创建成功 / 地址格式非法、TCP 探测失败、SDK 创建失败任一 |
+
+**PromQL 查询示例**：
+```promql
+# Nacos 连接失败率（最近 5 分钟）
+rate(metricagent_nacos_connect_total{result="fail"}[5m])
+/
+rate(metricagent_nacos_connect_total[5m])
+
+# 连接成功率（值越低越需关注）
+sum(rate(metricagent_nacos_connect_total{result="success"}[5m]))
+/
+sum(rate(metricagent_nacos_connect_total[5m]))
+```
+
+##### ③ `metricagent_config_list_pull_total`（Counter）
 
 配置清单拉取总次数，覆盖网络拉取、YAML 解析、空结果**全分支**（Counter 必须在所有路径 Inc，不能只在成功分支计数）。
 
@@ -572,7 +597,7 @@ rate(metricagent_config_list_pull_total{config_type="public"}[5m])
 sum by (config_type, result) (rate(metricagent_config_list_pull_total[5m]))
 ```
 
-##### ③ `metricagent_config_item_distribute_total`（Counter）
+##### ④ `metricagent_config_item_distribute_total`（Counter）
 
 二级配置分发处理总次数。触发时机：
 - 定时拉取循环中 `DistributeAllConfigs` 对每条二级配置的处理
@@ -590,7 +615,7 @@ rate(metricagent_config_item_distribute_total{result="success"}[5m])
 rate(metricagent_config_item_distribute_total[5m])
 ```
 
-##### ④ `metricagent_config_item_distribute_duration_seconds`（Histogram）
+##### ⑤ `metricagent_config_item_distribute_duration_seconds`（Histogram）
 
 单条二级配置完整分发流程总耗时分布。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
 
@@ -611,7 +636,7 @@ histogram_quantile(0.5,
 )
 ```
 
-##### ⑤ `metricagent_config_clean_trigger_total`（Counter）
+##### ⑥ `metricagent_config_clean_trigger_total`（Counter）
 
 配置清理触发次数。
 
@@ -625,7 +650,7 @@ histogram_quantile(0.5,
 sum(rate(metricagent_config_clean_trigger_total{result="skipped_high_risk"}[5m]))
 ```
 
-##### ⑥ `metricagent_guardian_self_heal_total`（Counter）
+##### ⑦ `metricagent_guardian_self_heal_total`（Counter）
 
 组件自愈执行次数（processTarget 中健康检查失败后触发自愈时计数）。
 
@@ -653,7 +678,7 @@ metricagent_guardian_self_heal_total{heal_result="success", health_result="fail"
 > metricagent_guardian_self_heal_total offset 5m
 ```
 
-##### ⑦ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
+##### ⑧ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
 
 组件自愈全流程总耗时分布（启动脚本执行 + 拉起后健康检查）。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
 

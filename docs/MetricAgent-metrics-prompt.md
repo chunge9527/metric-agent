@@ -45,7 +45,12 @@
 ### 6.2 配置分发模块埋点（关联原PRD：3.2 配置加载全章节）
 > 业务覆盖：3.2.1 Nacos对接、3.2.2 配置清单拉取、3.2.3 二级配置分发、3.2.4 配置清理、文件落盘备份回滚、重载脚本执行
 
-#### 6.2.1 配置清单拉取指标
+#### 6.2.1 Nacos连接埋点
+| 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数，覆盖初始连接 + 后台重连全分支 | result: [success, fail] | 3.2.1 Nacos对接 | 保留`result`：区分成功、失败两分支，符合全分支计数要求 |
+
+#### 6.2.2 配置清单拉取指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, result_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分网络异常、解析异常、空结果三类失败场景，便于故障定位 |
@@ -72,21 +77,22 @@
 
 ---
 
-## 指标汇总（共7个）
+## 指标汇总（共8个）
 | # | 指标名 | 类型 | 标签数 | 归属模块 |
 | --- | --- | --- | --- | --- |
 | 1 | `metricagent_build_info` | Gauge | 3 | 组件元数据 |
-| 2 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
-| 3 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
-| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
-| 5 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
-| 6 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
-| 7 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
+| 2 | `metricagent_nacos_connect_total` | Counter | 1 | 配置分发 |
+| 3 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
+| 4 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
+| 5 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
+| 6 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
+| 7 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
+| 8 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
 
 ---
 
 ## 输出交付物要求
-1. 生成完整 `internal/metrics/metrics.go`：全部7个指标定义，init()注册；`metricagent_build_info` 携带 agent_id/agent_group/agent_version 三个标签，其他指标只携带各自定义表中的业务标签；仅对 build_info 提供 `BuildInfoLabelsSet()` 设置函数。
+1. 生成完整 `internal/metrics/metrics.go`：全部8个指标定义，init() 实例化 + EnableMetrics() MustRegister；`metricagent_build_info` 携带 agent_id/agent_group/agent_version 三个标签，其他指标只携带各自定义表中的业务标签；仅对 build_info 提供 `BuildInfoLabelsSet()` 设置函数。
 2. 对 `config_service.go`、`guardian_service.go` 做 diff 式修改，在对应业务分支插入埋点调用；每一行埋点代码注释写明 `// PRD章节：xxx，指标语义：xxx`。
 3. 修改 `internal/bootstrap/server_init.go`：HTTP 服务启动时初始化 build_info 指标；指令模式跳过 metrics 初始化。
 4. 给出关键调用示例，说明埋点触发位置；**不要改动原有业务逻辑**，埋点只做观测。

@@ -38,6 +38,10 @@ var (
 
 // 6.2 配置分发模块
 var (
+	// NacosConnectTotal Nacos连接总次数（覆盖初始连接 + 后台重连全分支）
+	// 标签：result[success/fail]
+	NacosConnectTotal *prometheus.CounterVec
+
 	// ConfigListPullTotal 配置清单拉取总次数（覆盖网络拉取、YAML解析、空结果全分支）
 	// 标签：config_type[personal/public], result[success/fail_pull/fail_parse/result_empty]
 	ConfigListPullTotal *prometheus.CounterVec
@@ -78,7 +82,14 @@ func init() {
 		Help: "Agent程序构建版本信息，HTTP服务启动时设置，指标值恒为1",
 	}, buildInfoLabels)
 
-	// 6.2.1 配置清单拉取（仅业务标签：config_type, result）
+	// 6.2 配置分发模块
+	// 6.2.1 Nacos连接（仅业务标签：result）
+	NacosConnectTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "metricagent_nacos_connect_total",
+		Help: "Nacos连接总次数，覆盖初始连接 + 后台重连全分支",
+	}, []string{"result"})
+
+	// 6.2.2 配置清单拉取（仅业务标签：config_type, result）
 	ConfigListPullTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "metricagent_config_list_pull_total",
 		Help: "配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支",
@@ -131,6 +142,7 @@ func EnableMetrics() {
 	// PRD 约束：统一 MustRegister（panic on duplicate registration）
 	prometheus.MustRegister(
 		BuildInfo,
+		NacosConnectTotal,
 		ConfigListPullTotal,
 		ConfigItemDistributeTotal,
 		ConfigItemDistributeDuration,

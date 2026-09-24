@@ -449,8 +449,18 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	selfHealStart := time.Now()
 
 	// 提前声明埋点结果标签值，defer 中统一上报
-	var healResult, healthResult, overallResult string
+	// 初始值赋 "fail"：正常路径在各分支显式重写；panic 路径由 recover defer 设置为合法值
+	var healResult, healthResult, overallResult = "fail", "fail", "fail"
 	defer func() {
+		// panic 防御：确保 defer 上报的标签值是合法枚举，不是空字符串
+		if r := recover(); r != nil {
+			logger.Error("自愈流程 panic 已捕获",
+				"component", cfg.ComponentName,
+				"panic", fmt.Sprint(r))
+			healResult = "fail"
+			healthResult = "fail"
+			overallResult = "fail"
+		}
 		duration := time.Since(selfHealStart).Seconds()
 		// PRD 6.3.1，指标语义：组件自愈执行次数
 		metrics.GuardianSelfHealTotal.With(prometheus.Labels{

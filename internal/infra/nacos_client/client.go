@@ -23,6 +23,7 @@ import (
 	myerrors "metric-agent/internal/common/errors"
 	"metric-agent/internal/common/logger"
 	"metric-agent/internal/infra/iface"
+	"metric-agent/internal/metrics"
 	"metric-agent/internal/model"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
@@ -160,7 +161,21 @@ func probeNacosServer(host string, port uint64) error {
 
 // connect 创建 ConfigClient（定时拉取模式）
 // 调用前需确保服务可达（通过 probeNacosServer），创建成功后 SDK RpcClient 自动启动
-func (n *NacosClient) connect(cfg model.NacosConfig) error {
+func (n *NacosClient) connect(cfg model.NacosConfig) (err error) {
+	// PRD 6.2.1 Prometheus 埋点：Nacos 连接总次数（成功/失败/异常 panic 全分支计数）
+	defer func() {
+		// panic 防御：defer 在 panic 时依然执行，但命名返回值 err 可能未赋值
+		if r := recover(); r != nil {
+			err = fmt.Errorf("connect panic: %v", r)
+		}
+		result := "success"
+		if err != nil {
+			result = "fail"
+		}
+		// PRD 6.2.1，指标语义：Nacos 连接尝试结果（ParseNacosAddress / probeNacosServer / NewConfigClient 任一失败 → fail）
+		metrics.NacosConnectTotal.WithLabelValues(result).Inc()
+	}()
+
 	// 解析并校验地址格式（支持带scheme的URL写法）
 	host, port, err := ParseNacosAddress(cfg.Address)
 	if err != nil {
@@ -168,8 +183,8 @@ func (n *NacosClient) connect(cfg model.NacosConfig) error {
 	}
 
 	// 真实连通性探测（SDK懒连接，需主动确认服务可达，避免假"连接成功"）
-	if err := probeNacosServer(host, port); err != nil {
-		return err
+	if err = probeNacosServer(host, port); err != nil {
+		return
 	}
 
 	// 配置超时：<=0 时用默认值（默认 5000ms）
@@ -228,7 +243,8 @@ func (n *NacosClient) connect(cfg model.NacosConfig) error {
 
 	client, err := clients.NewConfigClient(param)
 	if err != nil {
-		return fmt.Errorf("创建Nacos配置服务失败: %w", err)
+		err = fmt.Errorf("创建Nacos配置服务失败: %w", err)
+		return
 	}
 
 	n.mu.Lock()
