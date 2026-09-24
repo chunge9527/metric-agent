@@ -294,6 +294,22 @@ func InitServer(cfg *model.AgentConfig, bindAddr string) (*http.Server, func(), 
 		}
 	}))
 
+	// 本地监听列表查询（PRD 3.3）
+	// 数据来源：ConfigService.registry 内存快照；configSvc 始终创建，即使 Nacos 未启用也返回空数组
+	mux.Handle(myconstant.RouteListen, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
+				Code:    http.StatusMethodNotAllowed,
+				Message: "仅支持 GET 方法",
+			})
+			return
+		}
+
+		q := r.URL.Query()
+		resp := configSvc.ListListeners(q.Get("group"), q.Get("dataId"), q.Get("storePath"))
+		writeJSON(w, http.StatusOK, resp)
+	}))
+
 	// 全局鉴权中间件
 	handler := service.AuthMiddleware(cfg.Auth.Key, mux)
 

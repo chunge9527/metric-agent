@@ -169,6 +169,9 @@ const RouteGuardianControl = "/api/v1/guardian"
 // RouteMetrics Prometheus metrics 暴露路径（PRD 硬性约束）
 const RouteMetrics = "/metrics"
 
+// RouteListen 本地监听列表查询接口路径（PRD 3.3）
+const RouteListen = "/api/v1/config/listen"
+
 // ============ 文件上传配置（PRD 3.8） ============
 
 // DefaultMaxUploadSize 默认单文件最大上传大小（字节），100MB

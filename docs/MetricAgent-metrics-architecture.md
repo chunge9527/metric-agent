@@ -100,9 +100,27 @@ main.runHTTPMode()
   └── ★ metrics.EnableMetrics()           ← 终于注册 8 个指标
       └── metrics.BuildInfoLabelsSet()
           └── mux.Handle("/metrics", ...) ← 路由生效
+
+─── 运行期（EnableMetrics 之后）───
+
+  ├── Nacos GetConfig / SearchConfig
+  │     ├─ SDK 返回 net.OpError / context.DeadlineExceeded
+  │     │   → NacosConnectTotal{fail}.Inc()  ← ✅ 运行期连接失败覆盖
+  │     │   → 返回 ErrCodeNacosConnect
+  │     │       → tryParseList 检测到 ErrCodeNacosConnect
+  │     │           → 跳过 ConfigListPullTotal.fail_pull  ← ✅ 协同去重
+  │     ├─ SDK 返回业务错误（鉴权失败等）
+  │     │   → 返回 ErrCodeNacosPull
+  │     │       → tryParseList → ConfigListPullTotal.fail_pull ✅
+  │     └─ 成功 → ConfigListPullTotal.success ✅
+  │
+  └── ConfigClient == nil（启动后始终未连上）
+        → GetConfig 返回 ErrCodeNacosConnect + NacosConnectTotal{fail}.Inc()
 ```
 
-**关键洞察**：`EnableMetrics()` 在 L201，晚于 nacos_client.NewNacosClient()（L107）和 guardianSvc.Start() 首跑（L179）。但因为 CounterVec.Inc() 是纯 atomic 操作不依赖 registry，**时序合法**——注册后 scrape 能读到累计值。
+**关键洞察**：
+1. `EnableMetrics()` 在 L201，晚于 nacos_client.NewNacosClient()（L107）和 guardianSvc.Start() 首跑（L179）。但因为 CounterVec.Inc() 是纯 atomic 操作不依赖 registry，**时序合法**——注册后 scrape 能读到累计值。
+2. **运行期 Nacos 连接失败**的埋点链路在 EnableMetrics 之后：`GetConfig/SearchConfig` → `isConnError()==true` → `NacosConnectTotal.fail++` → 返回 `ErrCodeNacosConnect` → `tryParseList` 跳过 `fail_pull`。
 
 ### 2.3 --exec 指令模式时序
 
@@ -143,24 +161,160 @@ promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
 
 ### 3.2 当前 default registry 完整指标清单
 
-| 来源 | 指标名 | 类型 | 注册时机 |
+#### 注册层级总览
+
+程序启动后，DefaultRegisterer 里的 collector 来自三层注册：
+
+```
+Layer 1: prometheus/client_golang/prometheus  init()       → 2 个 Collector（GoCollector + ProcessCollector）
+Layer 2: nacos-sdk-go/v2/common/monitor       init()       → 2 个 Vec（GaugeVec + HistogramVec）
+Layer 3: metric-agent/internal/metrics        EnableMetrics() → 8 个 Vec（HTTP 模式）/ 0 个（--exec 模式）
+```
+
+注意：**promhttp.Handler() 不注册任何 collector**，它只暴露 DefaultGatherer（= DefaultRegisterer 的 Gatherer 接口）当前已持有的 collector 集合。
+
+#### Layer 1：prometheus/client_golang 默认注册（init() 自动）
+
+来源：`vendor/prometheus/client_golang/prometheus/registry.go:L61-L64`
+
+```go
+func init() {
+    MustRegister(NewProcessCollector(ProcessCollectorOpts{}))
+    MustRegister(NewGoCollector())
+}
+```
+
+这是 prometheus 包自己的 init()，**import prometheus 时无条件注册**。
+
+##### ProcessCollector — 进程级运行时指标
+
+Collector 类型：`prometheus.ProcessCollector`（一个 Collector，Gather 时动态生成所有 process_* 指标）
+
+| 指标名 | 类型 | 标签 | 说明 |
 |---|---|---|---|
-| client_golang 默认 | `go_*`（约 20+ 个） | Gauge/Counter/Histogram | prometheus 包 init() |
-| client_golang 默认 | `process_*`（约 15+ 个） | Gauge/Counter | prometheus 包 init() |
-| nacos-sdk-go | `nacos_monitor` | GaugeVec | sdk monitor init() |
-| nacos-sdk-go | `nacos_client_request` | HistogramVec | sdk monitor init() |
-| **MetricAgent 自定义** | `metricagent_build_info` | GaugeVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_nacos_connect_total` | CounterVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_config_list_pull_total` | CounterVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_config_item_distribute_total` | CounterVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_config_item_distribute_duration_seconds` | HistogramVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_config_clean_trigger_total` | CounterVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_guardian_self_heal_total` | CounterVec | EnableMetrics() |
-| **MetricAgent 自定义** | `metricagent_guardian_self_heal_duration_seconds` | HistogramVec | EnableMetrics() |
+| `process_cpu_seconds_total` | Counter | — | 用户态 + 内核态 CPU 累计秒数 |
+| `process_open_fds` | Gauge | — | 当前打开的文件描述符数量 |
+| `process_max_fds` | Gauge | — | 进程能打开的最大文件描述符数 |
+| `process_virtual_memory_bytes` | Gauge | — | 虚拟内存大小（字节） |
+| `process_resident_memory_bytes` | Gauge | — | 常驻内存大小（字节） |
+| `process_heap_bytes` | Gauge | — | 堆内存大小（字节，仅 Linux） |
+| `process_start_time_seconds` | Gauge | — | 进程启动时间（Unix 秒） |
+
+**进程级指标受操作系统影响**：在非 Linux 平台（如 Windows）部分指标可能缺失或为 0。
+
+##### GoCollector — Go runtime 指标
+
+Collector 类型：`prometheus.GoCollector`（一个 Collector，Gather 时动态生成所有 go_* 指标）
+
+| 指标名 | 类型 | 标签 | 说明 |
+|---|---|---|---|
+| `go_goroutines` | Gauge | — | 当前 goroutine 数量 |
+| `go_threads` | Gauge | — | 当前 OS 线程数量 |
+| `go_memstats_alloc_bytes` | Gauge | — | 当前已分配字节（heap + objects） |
+| `go_memstats_total_alloc_bytes` | Counter | — | 累计已分配字节（monotonic） |
+| `go_memstats_sys_bytes` | Gauge | — | OS 已申请的总字节 |
+| `go_memstats_mallocs_total` | Counter | — | 累计分配次数 |
+| `go_memstats_frees_total` | Counter | — | 累计释放次数 |
+| `go_memstats_heap_alloc_bytes` | Gauge | — | 堆上已分配对象的字节数 |
+| `go_memstats_heap_sys_bytes` | Gauge | — | 堆从 OS 申请的字节数 |
+| `go_memstats_heap_idle_bytes` | Gauge | — | 堆中空闲 spans 字节数 |
+| `go_memstats_heap_inuse_bytes` | Gauge | — | 堆中已使用 spans 字节数 |
+| `go_memstats_heap_released_bytes` | Gauge | — | 堆已归还给 OS 的字节数 |
+| `go_memstats_heap_objects` | Gauge | — | 堆中对象总数 |
+| `go_memstats_buck_hash_sys_bytes` | Gauge | — | profiling bucket hash table 占用字节 |
+| `go_memstats_gc_sys_bytes` | Gauge | — | GC 元数据占用字节 |
+| `go_memstats_mspan_sys_bytes` | Gauge | — | mspan 结构体占用字节 |
+| `go_memstats_mcache_sys_bytes` | Gauge | — | mcache 结构体占用字节 |
+| `go_memstats_stack_inuse_bytes` | Gauge | — | goroutine 栈已使用字节 |
+| `go_memstats_stack_sys_bytes` | Gauge | — | goroutine 栈从 OS 申请的字节 |
+| `go_memstats_msinuse_sys_bytes` | Gauge | — | （Go 1.19+） |
+| `go_memstats_mspaninuse_sys_bytes` | Gauge | — | （Go 1.19+） |
+| `go_gc_duration_seconds` | Summary | `quantile` | GC 暂停耗时分布 |
+| `go_gc_duration_seconds_count` | Counter | — | GC 次数 |
+| `go_gc_duration_seconds_sum` | Counter | — | GC 暂停累计秒数 |
+| `go_goroutines_start_gc_total` | Counter | — | （Go 1.20+） |
+| `go_sched_goroutines_create_total` | Counter | — | （Go 1.22+） |
+| `go_sched_goroutines_block_total` | Counter | — | （Go 1.22+） |
+| `go_sched_goroutines_unblock_total` | Counter | — | （Go 1.22+） |
+| `go_sched_goroutines_unblock_time_seconds` | Counter | — | （Go 1.22+） |
+| `go_sched_waitstop_seconds` | Counter | — | （Go 1.22+） |
+| `go_sched_total_cycles_total` | Counter | — | （Go 1.22+） |
+| `go_build_info` | Gauge | `goversion, revision` | Go 编译版本信息（值恒为 1） |
+
+> **注**：Go runtime 指标数量随 Go 版本变化。当前 MetricAgent 使用的 Go 版本决定了实际输出项。以上是 Go 1.21~1.22 的完整集合。
+
+#### Layer 2：nacos-sdk-go 默认注册（init() 自动）
+
+来源：`vendor/nacos-sdk-go/v2/common/monitor/monitor.go:L33-L35`
+
+```go
+func init() {
+    prometheus.MustRegister(gaugeMonitorVec, histogramMonitorVec)
+}
+```
+
+这是 SDK monitor 包自己的 init()，**import nacos-sdk-go 时无条件注册**。
+
+| Collector 类型 | 指标名 | Go Prometheus 类型 | 标签 | SDK 调用 |
+|---|---|---|---|---|
+| GaugeVec | `nacos_monitor` | GaugeVec | `module, name` | `GetServiceInfoMapSizeMonitor()`、`GetDom2BeatSizeMonitor()`、`GetListenConfigCountMonitor()` |
+| HistogramVec | `nacos_client_request` | HistogramVec | `module, method, url, code` | `GetConfigRequestMonitor(method, url, code)`、`GetNamingRequestMonitor(method, url, code)` |
+
+`nacos_client_request` 的 bucket 为 client_golang 默认值 `[.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10]` 秒。
+
+#### Layer 3：MetricAgent 自定义注册（EnableMetrics() 显式）
+
+来源：`internal/metrics/metrics.go:L143-L152`
+
+**仅 HTTP 模式**调用 EnableMetrics()；**--exec 模式完全跳过**。
+
+| Collector 类型 | 指标名 | Go Prometheus 类型 | 标签数 | 标签 |
+|---|---|---|---|---|
+| GaugeVec | `metricagent_build_info` | GaugeVec | 3 | `agent_id, agent_group, agent_version` |
+| CounterVec | `metricagent_nacos_connect_total` | CounterVec | 1 | `result` |
+| CounterVec | `metricagent_config_list_pull_total` | CounterVec | 2 | `config_type, result` |
+| CounterVec | `metricagent_config_item_distribute_total` | CounterVec | 1 | `result` |
+| HistogramVec | `metricagent_config_item_distribute_duration_seconds` | HistogramVec | 1 | `result` |
+| CounterVec | `metricagent_config_clean_trigger_total` | CounterVec | 1 | `result` |
+| CounterVec | `metricagent_guardian_self_heal_total` | CounterVec | 3 | `component_name, heal_result, health_result` |
+| HistogramVec | `metricagent_guardian_self_heal_duration_seconds` | HistogramVec | 2 | `component_name, result` |
+
+Histogram 统一 bucket：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]` 秒。
+
+#### 完整汇总（HTTP 模式 scrape 时能看到的全部指标）
+
+| Layer | 来源 | Collector 数 | 指标数 | 注册时机 | exec 模式存在？ |
+|---|---|---|---|---|---|
+| 1 | prometheus/client_golang | 2（ProcessCollector + GoCollector） | ~25-35 个 process_*/go_* | prometheus 包 init() | ✅ 是 |
+| 2 | nacos-sdk-go/common/monitor | 2（GaugeVec + HistogramVec） | 2 个（动态多时序） | sdk monitor init() | ✅ 是 |
+| 3 | MetricAgent internal/metrics | 8（4 CounterVec + 2 GaugeVec + 2 HistogramVec） | 8 个（动态多时序） | EnableMetrics() | ❌ **否** |
+| | **合计** | **12 个 Collector** | **~35-45 个指标时序族** | — | — |
+
+#### 为什么是 Collector 数不是指标数
+
+prometheus/client_golang 的 ProcessCollector 和 GoCollector 都是**单个 Collector 对象**，它们在 `Gather()` 时动态生成多个指标时序。而我们的 8 个 Vec 各自是独立的 Collector 对象，每个生成 1 个指标名（但有多个标签组合时序）。这就是 registry 里 `collectorsByID` 的实际内容：
+
+```
+DefaultRegisterer.collectorsByID (HTTP 模式)
+  ├── ProcessCollector          → 生成 ~7 个 process_* 指标
+  ├── GoCollector               → 生成 ~25 个 go_* 指标（Go 版本相关）
+  ├── gaugeMonitorVec          → nacos_monitor（动态时序）
+  ├── histogramMonitorVec      → nacos_client_request（动态时序）
+  ├── BuildInfo                → metricagent_build_info
+  ├── NacosConnectTotal        → metricagent_nacos_connect_total
+  ├── ConfigListPullTotal      → metricagent_config_list_pull_total
+  ├── ConfigItemDistributeTotal → metricagent_config_item_distribute_total
+  ├── ConfigItemDistributeDuration → metricagent_config_item_distribute_duration_seconds
+  ├── ConfigCleanTriggerTotal  → metricagent_config_clean_trigger_total
+  ├── GuardianSelfHealTotal    → metricagent_guardian_self_heal_total
+  └── GuardianSelfHealDuration → metricagent_guardian_self_heal_duration_seconds
+```
 
 ### 3.3 /metrics 鉴权状态
 
-`/metrics` 已加入 AuthMiddleware 白名单（与 `/health`、`/api/v1/exec`、`/api/v1/guardian` 并列），Prometheus scrape 无需携带 `Authentication` 请求头。
+`/metrics` **需鉴权**——AuthMiddleware 白名单仅保留 `/health`、`/api/v1/exec`、`/api/v1/guardian` 三条路径。Prometheus scrape 配置需携带 `Authentication: <auth.key>` 请求头。
+
+> 历史说明：/metrics 最初设计为免鉴权（PRD 阶段认为 Prometheus scrape 不携带业务认证头）。后因安全加固移除出白名单，接口统一走 Authentication 鉴权。
 
 ---
 
@@ -350,8 +504,9 @@ defer func() {
 | # | 决策 | 选择 | 理由 | 潜在影响 |
 |---|---|---|---|---|
 | 1 | init() 注册 vs EnableMetrics() 注册 | **EnableMetrics()** | exec 模式跳过指标初始化 | MustRegister 与 Inc() 时序差需保证 Inc() 合法（CounterVec.Inc() 不检查 registry） |
-| 2 | /metrics 鉴权 | **加入白名单** | Prometheus scrape 通常不携带业务认证头 | 如果 YAML auth.key 为空，白名单路径等价于完全开放 |
+| 2 | /metrics 鉴权 | **需要鉴权** | 安全加固；与其他业务接口统一鉴权策略 | Prometheus scrape 配置需携带 Authentication 请求头；auth.key 为空时所有请求被拒 |
 | 3 | SDK 指标处理 | **保留** | 可观测 SDK 内部请求，零成本 | /metrics 输出包含非 metricagent_ 前缀指标 |
 | 4 | Guardian 零值防御 | **显式赋 "fail"** + recover defer | 防御性编程，panic 时标签值合法而非空字符串 | 代码多了 1 行初始化 |
 | 5 | connect() 恢复策略 | **defer 内 recover 转 error** | Go defer 在 panic 时依然执行，recover 转 error 后 defer 内的 err!=nil 判断自然走 fail 分支 | 新增 fmt.Errorf 包装 |
 | 6 | Histogram skipped 分支 | **Observe(0)** | 让 skipped 分支有采样数据，与 Counter 对齐 | skipped 分支 Histogram 值恒为 0，bucket 计数集中在 bucket=0 |
+| 7 | 运行期 Nacos RpcClient 重连可观测性 | **GetConfig/SearchConfig 封装层补埋点 + 错误码分层** | SDK RpcClient 内部重连对我们不可观测；在 GetConfig/SearchConfig error 分支用 `isConnError()` 识别连接级失败 → 报 `nacos_connect_total.fail`；同时返回 `ErrCodeNacosConnect (42002)` 让 config_service 跳过 `fail_pull` | 新增 `isConnError()` 辅助函数；GetConfig/SearchConfig 从统一返回 `ErrNacosPull` 改为按错误类型分层返回（ErrNacosConnect vs ErrNacosPull）；tryParseList 新增错误码检测逻辑 |

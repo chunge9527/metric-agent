@@ -10,7 +10,7 @@
 | ------- | ---------------------------------------------------------- |
 | 基础 URL  | `http://{host}:{port}`，默认端口 **9092**，默认绑定 **0.0.0.0:9092** |
 | 鉴权方式    | 请求头 `Authentication`，值为配置文件中的 `auth.key`，大小写敏感精确匹配         |
-| 鉴权白名单   | `/health` / `/metrics` / `/api/v1/guardian` 跳过鉴权；`/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护） |
+| 鉴权白名单   | `/health` / `/api/v1/guardian` 跳过鉴权；`/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护）；`/metrics` **需鉴权** |
 | 请求体大小限制 | 所有接口 10MB（除 `/api/v1/upload` 另受文件大小限制）                     |
 | 默认超时    | 连接读写 30s，空闲 120s；命令执行最长 600s；请求透传最长 120s                   |
 
@@ -487,20 +487,106 @@ curl http://127.0.0.1:9092/api/v1/guardian?action=resume
 
 ---
 
-### 1.7 Prometheus Metrics 指标暴露
+### 1.7 本地监听列表查询
+
+| 项目           | 说明                                             |
+| ------------ | ---------------------------------------------- |
+| **Method**   | `GET`                                          |
+| **URL**      | `/api/v1/config/listen`                        |
+| **鉴权**       | ✅ 需要（`Authentication`）                      |
+| **Query 参数** | `group` / `dataId` / `storePath`（均可选，精确过滤，AND 逻辑） |
+
+> 数据来源：ConfigService 内存中的 ListenRegistry 快照，不实时请求 Nacos。接口始终可用——即使 `feature.enableNacos=false`，ConfigService 也会正常创建，registry 为空 map，返回 `{"total":0,"items":[]}`。
+
+#### 1.7.1 Query 参数
+
+| 参数        | 类型     | 必填 | 说明                                       |
+| --------- | ------ | -- | ---------------------------------------- |
+| group     | string | ❌  | 按 Nacos group 精确过滤，不传则不过滤                    |
+| dataId    | string | ❌  | 按 Nacos dataId 精确过滤，不传则不过滤                   |
+| storePath | string | ❌  | 按本地存储目录精确过滤，不传则不过滤；传入多个时取交集（AND） |
+
+#### 1.7.2 成功响应（HTTP 200）
+
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "itemKey": "a1b2c3d4e5f6...",
+      "configCode": "vm_agent_config",
+      "namespace": "",
+      "group": "VM_GROUP",
+      "dataId": "vm_agent.yml",
+      "suffix": ".yml",
+      "storePath": "/etc/vm/cluster/",
+      "finalName": "vm_agent.yml",
+      "reFileName": "",
+      "fileMode": "0755",
+      "reloadScript": "",
+      "enableClean": false
+    }
+  ]
+}
+```
+
+| 字段          | 类型     | 说明                                                                     |
+| ----------- | ------ | ---------------------------------------------------------------------- |
+| total       | int    | 过滤后的总条目数                                                               |
+| items       | array  | 监听配置项列表；按 `group` 升序 → `dataId` 升序排列                                      |
+| items[].itemKey      | string | 注册表唯一主键（MD5），由 namespace+group+dataId+suffix+storePath+fileMode+reloadScript+reFileName 拼接生成 |
+| items[].configCode   | string | 配置项编号（PRD 3.2.2），用于跨清单 configCode 去重和优先级合并                        |
+| items[].namespace    | string | Nacos 命名空间                                                              |
+| items[].group        | string | Nacos 配置分组                                                              |
+| items[].dataId       | string | Nacos dataId                                                             |
+| items[].suffix       | string | 文件后缀（已归一化处理，如 `.yml`、`.yaml`）                                    |
+| items[].storePath    | string | 本地存储目录路径（已自动补全末尾路径分隔符）                                                  |
+| items[].finalName    | string | 计算后的最终文件名（reFileName 非空优先，否则 dataId+suffix）                          |
+| items[].reFileName   | string | 文件重命名配置，未配置时为空字符串                                                      |
+| items[].fileMode     | string | 文件权限（四位八进制字符串，如 `"0755"`、`"0644"`）                                        |
+| items[].reloadScript | string | 重载脚本内容，未配置时为空字符串                                                       |
+| items[].enableClean  | bool   | 是否执行配置对齐（PRD 3.2.2），仅在按分组拉取且开启清理时为 true                                   |
+
+#### 1.7.3 错误响应
+
+| HTTP 状态 | 原因                |
+| ------- | ----------------- |
+| 401     | 鉴权失败（未携带或携带错误的 `Authentication` 请求头） |
+| 405     | 使用了非 GET 方法       |
+
+#### 1.7.4 cURL 示例
+
+```bash
+# 查询所有监听配置
+curl -H "Authentication: your-auth-key" \
+  http://127.0.0.1:9092/api/v1/config/listen
+
+# 按 group 过滤
+curl -H "Authentication: your-auth-key" \
+  'http://127.0.0.1:9092/api/v1/config/listen?group=VM_GROUP'
+
+# 按 group + storePath 组合过滤（AND 逻辑）
+curl -H "Authentication: your-auth-key" \
+  'http://127.0.0.1:9092/api/v1/config/listen?group=VM_GROUP&storePath=/etc/vm/cluster/'
+```
+
+
+---
+
+### 1.8 Prometheus Metrics 指标暴露
 
 | 项目               | 说明                                                                |
 | ---------------- | ----------------------------------------------------------------- |
 | **Method**       | `GET`                                                             |
 | **URL**          | `/metrics`                                                        |
 | **Content-Type** | `text/plain; version=0.0.4; charset=utf-8`（Prometheus 文本格式）          |
-| **鉴权**           | ❌ 跳过（鉴权白名单路径，Prometheus scrape 无需携带认证头）                          |
+| **鉴权**           | ✅ 需要（Prometheus scrape 需携带 `Authentication: <auth.key>` 请求头）                |
 | **启用条件**       | 仅 HTTP 服务模式启用；`--exec` 指令执行模式**不暴露**本接口，default registry 中无任何指标 |
 | **暴露方式**       | 复用 `promhttp.Handler()`，Prometheus Server 直接 scrape 即可                          |
 
-> **说明**：本接口按 Prometheus 官方 exposition format 输出文本格式指标，包含 `promhttp` 默认的 Go runtime 指标（`go_*`、`process_*`）以及 MetricAgent 业务自定义指标。`/metrics` 在鉴权白名单中，scrape 端可直接无认证访问。
+> **说明**：本接口按 Prometheus 官方 exposition format 输出文本格式指标，包含 `promhttp` 默认的 Go runtime 指标（`go_*`、`process_*`）以及 MetricAgent 业务自定义指标。`/metrics` **需鉴权**，Prometheus scrape 配置需携带 `Authorization: Bearer <auth.key>` 请求头（见 §1.8.1）。
 
-#### 1.7.1 cURL 示例
+#### 1.8.1 cURL 示例
 
 ```bash
 # Prometheus Server scrape 配置示例（prometheus.yml）
@@ -508,14 +594,14 @@ curl http://127.0.0.1:9092/api/v1/guardian?action=resume
 #   - job_name: metric-agent
 #     static_configs:
 #       - targets: ['127.0.0.1:9092']
-#     params:
-#       auth: ['your-auth-key']   # 或通过 relabel_configs 设置 header
+#     headers:
+#       Authentication: ['your-auth-key']
 
-# 手动 cURL 查看当前指标（无需鉴权）
-curl http://127.0.0.1:9092/metrics
+# 手动 cURL 查看当前指标（需携带鉴权头）
+curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/metrics
 ```
 
-#### 1.7.2 指标总览
+#### 1.8.2 指标总览
 
 共 **8 个** 自定义业务指标，前缀统一为 `metricagent_`：
 
@@ -532,7 +618,7 @@ curl http://127.0.0.1:9092/metrics
 
 > **关于 `agent_id` / `agent_group` / `agent_version` 标签**：PRD 规定这三个标签**仅在 `metricagent_build_info` 中携带**，其他业务指标不需要重复携带——多实例版本识别、故障溯源统一通过 `build_info` 完成。
 
-#### 1.7.3 指标详细说明
+#### 1.8.3 指标详细说明
 
 ##### ① `metricagent_build_info`（Gauge，固定值 1）
 
@@ -555,14 +641,20 @@ sum by (agent_version) (metricagent_build_info)
 
 ##### ② `metricagent_nacos_connect_total`（Counter）
 
-Nacos 连接总次数。触发时机：
-- `NewNacosClient` 启动时的**初始连接**尝试
-- `reconnectLoop` 后台定时**重连**尝试（初始失败后每 60s 重试）
-- 每次调用覆盖完整 `connect()` 链路：ParseNacosAddress → probeNacosServer → NewConfigClient 全流程
+Nacos 连接总次数。**三个触发场景**：
+
+| 场景 | 触发位置 | fail 判定 |
+| --- | --- | --- |
+| 启动时 ConfigClient 创建 | `connect()` defer | ParseNacosAddress 失败 / probeNacosServer TCP 探测失败 / NewConfigClient 失败 / panic |
+| 后台定时重连 | `reconnectLoop` → `connect()` defer | 同上 |
+| **运行期 SDK RpcClient 自动重连** | `GetConfig/SearchConfig` error 分支 | SDK 返回 `net.OpError`（dial tcp refused / i/o timeout / reset）或 `context.DeadlineExceeded` |
+| **ConfigClient 始终未创建** | `GetConfig/SearchConfig` 入口 | `client == nil` |
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
-| `result` | `success` / `fail` | ConfigClient 创建成功 / 地址格式非法、TCP 探测失败、SDK 创建失败任一 |
+| `result` | `success` / `fail` | ConfigClient 创建成功 / 任意连接级失败（初始+运行期统一覆盖） |
+
+> **与 `config_list_pull_total.fail_pull` 协同去重**：当 `GetConfig` 返回连接级错误时，`nacos_client` 内部已计入本指标 `fail`，同时返回 `ErrCodeNacosConnect (42002)`。`config_service.tryParseList` 检测到此错误码时**跳过** `fail_pull` 计数，避免同一失败被两个指标双重计数。
 
 **PromQL 查询示例**：
 ```promql
@@ -571,20 +663,22 @@ rate(metricagent_nacos_connect_total{result="fail"}[5m])
 /
 rate(metricagent_nacos_connect_total[5m])
 
-# 连接成功率（值越低越需关注）
-sum(rate(metricagent_nacos_connect_total{result="success"}[5m]))
-/
-sum(rate(metricagent_nacos_connect_total[5m]))
+# 运行期 Nacos 连接是否持续失败（fail 无 success，说明启动正常后 Nacos 挂了）
+sum(rate(metricagent_nacos_connect_total{result="fail"}[5m])) > 0
+and
+sum(metricagent_nacos_connect_total{result="success"}) > 0
 ```
 
 ##### ③ `metricagent_config_list_pull_total`（Counter）
 
-配置清单拉取总次数，覆盖网络拉取、YAML 解析、空结果**全分支**（Counter 必须在所有路径 Inc，不能只在成功分支计数）。
+配置清单拉取总次数，覆盖 YAML 解析、空结果、**业务错误**（鉴权失败、dataId 不存在）全分支。
+
+> **与 `nacos_connect_total` 协同去重**：`fail_pull` 仅在 **SDK 业务错误**（非连接类）时计数。当 `GetConfig` 返回 `ErrCodeNacosConnect (42002)`（Nacos 连接级失败）时，`tryParseList` **跳过** `fail_pull`——此类场景由 `metricagent_nacos_connect_total{result="fail"}` 统一覆盖。
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
 | `config_type` | `personal` / `public` | 个性化配置清单 / 公共配置清单，两次独立拉取动作 |
-| `result` | `success` / `fail_pull` / `fail_parse` / `result_empty` | 拉取成功 / 网络层失败 / YAML 解析失败 / 拉取成功但内容为空或解析结果为空数组 |
+| `result` | `success` / `fail_pull` / `fail_parse` / `result_empty` | 拉取成功 / 业务层错误（鉴权、dataId不存在等） / YAML 解析失败 / 拉取成功但内容为空或解析结果为空数组 |
 
 **PromQL 查询示例**：
 ```promql

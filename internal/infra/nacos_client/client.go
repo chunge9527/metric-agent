@@ -10,6 +10,8 @@
 package nacos_client
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -108,6 +110,25 @@ func NewNacosClient(cfg model.NacosConfig) (*NacosClient, error) {
 
 // DefaultNacosPort Nacos默认主端口
 const DefaultNacosPort = 8848
+
+// isConnError 判断 error 是否为 Nacos 连接级失败（而非业务/鉴权错误）
+// 用于区分"网络不通 / DNS 解析失败 / TCP 拒绝 / RpcClient 超时"等场景
+// 与 SDK 正常返回的业务错误（如 dataId 不存在、鉴权失败）区分开
+func isConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// 类型 1: 网络层错误（dial tcp refused / i/o timeout / reset）
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	// 类型 2: 请求超时（SDK RpcClient 在 context 超时后返回）
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return false
+}
 
 // ParseNacosAddress 解析Nacos服务地址
 // 支持格式：http://host:port、https://host:port、host:port、host（默认端口8848）
@@ -336,14 +357,20 @@ func (n *NacosClient) doReconnect(cfg model.NacosConfig, retryCount int, interva
 
 // GetConfig 拉取指定 dataId + group 的配置内容
 // 直接透传 SDK 调用；连接状态由 SDK 内部 RpcClient 自动管理（重试 + healthCheck + reconnect）
-// configClient == nil 时返回错误（说明 ConfigClient 尚未创建成功）
+//
+// 返回错误语义：
+//   - ErrCodeNacosConnect (42002)：ConfigClient 未创建 / 网络层错误 / RpcClient 超时 → 计入 nacos_connect_total{fail}
+//   - ErrCodeNacosPull (42003)：SDK 业务错误（鉴权、dataId 不存在等）→ 不影响 nacos_connect_total
 func (n *NacosClient) GetConfig(dataId, group string) (string, error) {
 	n.mu.RLock()
 	client := n.configClient
 	n.mu.RUnlock()
 
 	if client == nil {
-		return "", myerrors.ErrNacosPull(dataId, fmt.Errorf("Nacos ConfigClient 尚未创建"))
+		// ConfigClient 从未创建成功 → Nacos 连接问题 → 计入 connect_total
+		// PRD 6.2.1，指标语义：运行期 ConfigClient == nil（启动连接始终失败）
+		metrics.NacosConnectTotal.WithLabelValues("fail").Inc()
+		return "", myerrors.ErrNacosConnect(fmt.Errorf("Nacos ConfigClient 尚未创建"))
 	}
 
 	content, err := client.GetConfig(vo.ConfigParam{
@@ -351,8 +378,16 @@ func (n *NacosClient) GetConfig(dataId, group string) (string, error) {
 		Group:  group,
 	})
 	if err != nil {
-		logger.Warn("Nacos GetConfig 请求失败（SDK RpcClient 正在自动重连）",
+		logger.Warn("Nacos GetConfig 请求失败",
 			"error", err, "dataId", dataId, "group", group)
+
+		if isConnError(err) {
+			// SDK RpcClient 重连期间的连接级失败 → 计入 connect_total
+			// PRD 6.2.1，指标语义：运行期 Nacos 连接断开导致请求失败
+			metrics.NacosConnectTotal.WithLabelValues("fail").Inc()
+			return "", myerrors.ErrNacosConnect(err)
+		}
+		// 业务错误（鉴权失败、dataId 不存在等）→ 返回 ErrNacosPull
 		return "", myerrors.ErrNacosPull(dataId, err)
 	}
 	return content, nil
@@ -360,6 +395,9 @@ func (n *NacosClient) GetConfig(dataId, group string) (string, error) {
 
 // SearchConfig 按分组分页查询配置列表
 // 直透传 SDK 调用；连接状态由 SDK 内部 RpcClient 自动管理
+//
+// 返回错误语义同 GetConfig：连接级错误返回 ErrNacosConnect + connect_total.fail，
+// 业务级错误返回 ErrNacosPull（不影响 connect_total）。
 //
 // 注意：显式传 DataId="*" 而非留空。Nacos v2 API `/v1/cs/configs` 在部分版本中
 // 对 dataId=""（空字符串）处理不规范，可能返回空结果；Nacos 控制台使用 v3 API
@@ -370,7 +408,10 @@ func (n *NacosClient) SearchConfig(group string, pageNo, pageSize int) (*model.C
 	n.mu.RUnlock()
 
 	if client == nil {
-		return nil, myerrors.ErrNacosPull(fmt.Sprintf("group=%s", group), fmt.Errorf("Nacos ConfigClient 尚未创建"))
+		// ConfigClient 从未创建成功 → Nacos 连接问题 → 计入 connect_total
+		// PRD 6.2.1，指标语义：运行期 ConfigClient == nil（启动连接始终失败）
+		metrics.NacosConnectTotal.WithLabelValues("fail").Inc()
+		return nil, myerrors.ErrNacosConnect(fmt.Errorf("Nacos ConfigClient 尚未创建"))
 	}
 
 	if pageNo <= 0 {
@@ -388,8 +429,16 @@ func (n *NacosClient) SearchConfig(group string, pageNo, pageSize int) (*model.C
 		PageSize: pageSize,
 	})
 	if err != nil {
-		logger.Warn("Nacos SearchConfig 请求失败（SDK RpcClient 正在自动重连）",
+		logger.Warn("Nacos SearchConfig 请求失败",
 			"error", err, "group", group, "namespace", n.namespace)
+
+		if isConnError(err) {
+			// SDK RpcClient 重连期间的连接级失败 → 计入 connect_total
+			// PRD 6.2.1，指标语义：运行期 Nacos 连接断开导致请求失败
+			metrics.NacosConnectTotal.WithLabelValues("fail").Inc()
+			return nil, myerrors.ErrNacosConnect(err)
+		}
+		// 业务错误 → 返回 ErrNacosPull
 		return nil, myerrors.ErrNacosPull(fmt.Sprintf("group=%s", group), err)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	myconstant "metric-agent/internal/common/constant"
+	myerrors "metric-agent/internal/common/errors"
 	"metric-agent/internal/common/filekit"
 	"metric-agent/internal/common/logger"
 	"metric-agent/internal/infra/iface"
@@ -269,11 +271,23 @@ func mergeMetricConfigLists(personal, public model.MetricConfigList) model.Metri
 }
 
 // tryParseList 拉取并解析单个配置清单；成功返回 MetricConfigList + true，失败返回 nil,false 并打印对应日志
+//
+// 指标语义（与 nacos_client 协同去重）：
+//   - GetConfig 返回 ErrCodeNacosConnect (42002) → 跳过 config_list_pull_total.fail_pull，
+//     该场景由 nacos_client.GetConfig 内部计入 nacos_connect_total{fail}
+//   - 其他 GetConfig 错误（业务错误）→ 正常计入 fail_pull
 func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigList, bool) {
 	content, err := s.cc.GetConfig(dataID, s.params.NacosGroup)
 	if err != nil {
+		// 判断是否为 Nacos 连接级错误：跳过 config_list_pull_total，由 nacos_connect_total 统一覆盖
+		var appErr *myerrors.AppError
+		if errors.As(err, &appErr) && appErr.Code == myerrors.ErrCodeNacosConnect {
+			logger.Warn("配置清单拉取失败（Nacos 连接问题，已由 nacos_connect_total 覆盖）",
+				"source", source, "dataId", dataID, "error", err)
+			return nil, false
+		}
 		logger.Warn("配置清单拉取失败", "source", source, "dataId", dataID, "error", err)
-		// PRD 6.2.1，指标语义：配置清单拉取失败（网络层）
+		// PRD 6.2.1，指标语义：配置清单拉取失败（网络层以外的业务错误）
 		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "fail_pull"}).Inc()
 		return nil, false
 	}
@@ -1340,4 +1354,62 @@ func newUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return hex.EncodeToString(b)
+}
+
+// ListListeners 查询本地监听注册表快照（PRD 3.3）
+// 数据来源：ConfigService.registry（内存快照，无 Nacos 实时请求）
+// 支持按 group / dataId / storePath 三个可选参数做精确过滤（AND 逻辑）
+// 结果按 group 升序、dataId 升序排列
+//
+// # author: 王春  # date: 2026-09-24
+func (s *ConfigService) ListListeners(groupFilter, dataIdFilter, storePathFilter string) *model.ListenListResponse {
+	// 从注册表获取快照（内部 RWMutex 保证并发安全）
+	items := s.registry.Items()
+
+	// 过滤
+	filtered := make([]*ListenRegistryItem, 0, len(items))
+	for _, it := range items {
+		if groupFilter != "" && it.Group != groupFilter {
+			continue
+		}
+		if dataIdFilter != "" && it.DataId != dataIdFilter {
+			continue
+		}
+		if storePathFilter != "" && it.StorePath != storePathFilter {
+			continue
+		}
+		filtered = append(filtered, it)
+	}
+
+	// 排序：按 group 升序 → dataId 升序
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Group != filtered[j].Group {
+			return filtered[i].Group < filtered[j].Group
+		}
+		return filtered[i].DataId < filtered[j].DataId
+	})
+
+	// 转换为响应结构
+	out := make([]model.ListenItemResponse, 0, len(filtered))
+	for _, it := range filtered {
+		out = append(out, model.ListenItemResponse{
+			ItemKey:      it.ItemKey,
+			ConfigCode:   it.ConfigCode,
+			Namespace:    it.Namespace,
+			Group:        it.Group,
+			DataId:       it.DataId,
+			Suffix:       it.Suffix,
+			StorePath:    it.StorePath,
+			FinalName:    it.FinalName,
+			ReFileName:   it.ReFileName,
+			FileMode:     fmt.Sprintf("%04o", int64(it.FileMode)), // os.FileMode → 四位八进制字符串，如 "0755"
+			ReloadScript: it.ReloadScript,
+			EnableClean:  it.EnableClean,
+		})
+	}
+
+	return &model.ListenListResponse{
+		Total: len(out),
+		Items: out,
+	}
 }

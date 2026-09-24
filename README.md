@@ -71,6 +71,7 @@
 | 7 | **优雅关闭**  | 捕获 SIGTERM/SIGINT，HTTP Shutdown 10s 超时自动 SetKeepAlivesEnabled(false) 阻止新连接；依次停止 Nacos、守护巡检、定时任务、日志        |
 | 8 | **双模式运行** | 指令模式（CLI）和 HTTP 服务模式自动识别，无需特殊参数                                                                 |
 | 9 | **特性开关**  | `feature.enableNacos / enableGuardian / enableSchedule` 独立控制各服务启停                               |
+| 10 | **Prometheus Metrics** | HTTP 模式自动暴露 `/metrics`（需鉴权，scrape 端携带 `Authentication` 请求头），8 个业务指标覆盖组件元数据、Nacos 连接、配置分发、进程守护；exec 模式不暴露 |
 
 ## 技术栈
 
@@ -724,6 +725,44 @@ GET /api/v1/guardian?action=status|pause|resume
 ```
 
 > 若 `feature.enableGuardian=false`，所有 action 返回 HTTP 503。
+
+### 6. Prometheus Metrics 指标暴露
+
+```
+GET /metrics
+```
+
+| 项目 | 说明 |
+| -- | --- |
+| 鉴权 | ✅ 需要（Prometheus scrape 需携带 `Authentication: <auth.key>` 请求头） |
+| 启用条件 | **仅 HTTP 服务模式**；指令执行模式（`--exec`）完全跳过指标初始化 |
+| Content-Type | `text/plain; version=0.0.4` |
+| 默认地址 | `http://127.0.0.1:9092/metrics` |
+
+cURL 示例：
+```bash
+# 手动查看（需鉴权）
+curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/metrics
+```
+
+#### 指标概览
+
+共 8 个 `metricagent_` 前缀的自定义业务指标，同时包含 Go runtime `go_*`、进程级 `process_*`、nacos-sdk-go 内置 `nacos_*` 指标。
+
+| # | 指标名 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `metricagent_build_info` | Gauge | 组件元数据（agent_id/agent_group/agent_version，值恒为 1） |
+| 2 | `metricagent_nacos_connect_total` | Counter | Nacos 连接总次数（初始连接 + 后台重连 + 运行期 SDK RpcClient 重连） |
+| 3 | `metricagent_config_list_pull_total` | Counter | 配置清单拉取总次数（success/fail_pull/fail_parse/result_empty） |
+| 4 | `metricagent_config_item_distribute_total` | Counter | 二级配置分发处理总次数 |
+| 5 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 单条配置分发耗时分布 |
+| 6 | `metricagent_config_clean_trigger_total` | Counter | 配置清理触发次数 |
+| 7 | `metricagent_guardian_self_heal_total` | Counter | 组件自愈执行次数 |
+| 8 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 组件自愈全流程耗时分布 |
+
+> **协同去重**：Nacos 连接级失败统一由 `metricagent_nacos_connect_total{result="fail"}` 覆盖，`config_list_pull_total` 检测到连接错误时跳过 `fail_pull` 计数。
+
+详见 [Document.md §1.7](docs/Document.md) 指标详细说明和 [MetricAgent-metrics-architecture.md](docs/MetricAgent-metrics-architecture.md) 架构分析文档。
 
 ## 管理脚本
 

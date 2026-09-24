@@ -74,6 +74,43 @@ type UploadResult struct {
 	Backup string `json:"backup,omitempty"`
 }
 
+// ListenItemResponse 本地监听列表查询 - 单条配置项响应（PRD 3.3）
+// 数据源：ListenRegistryItem，用于 ConfigService.ListListeners() 返回
+type ListenItemResponse struct {
+	// ItemKey 注册表唯一主键（MD5），由 namespace+group+dataId+suffix+storePath+fileMode+reloadScript+reFileName 拼接生成
+	ItemKey string `json:"itemKey"`
+	// ConfigCode 配置项编号（PRD 3.2.2），用于跨清单 configCode 去重和优先级合并
+	ConfigCode string `json:"configCode"`
+	// Namespace Nacos 命名空间
+	Namespace string `json:"namespace"`
+	// Group Nacos 配置分组
+	Group string `json:"group"`
+	// DataId Nacos dataId
+	DataId string `json:"dataId"`
+	// Suffix 文件后缀（已归一化处理）
+	Suffix string `json:"suffix"`
+	// StorePath 本地存储目录路径（已自动补全末尾路径分隔符）
+	StorePath string `json:"storePath"`
+	// FinalName 计算后的最终文件名
+	FinalName string `json:"finalName"`
+	// ReFileName 文件重命名配置，未配置时为空字符串
+	ReFileName string `json:"reFileName"`
+	// FileMode 文件权限（八进制字符串，如 "0755"）
+	FileMode string `json:"fileMode"`
+	// ReloadScript 重载脚本内容，未配置时为空字符串
+	ReloadScript string `json:"reloadScript"`
+	// EnableClean 是否执行配置对齐（PRD 3.2.2），仅在按分组拉取且开启清理时为 true
+	EnableClean bool `json:"enableClean"`
+}
+
+// ListenListResponse 本地监听列表查询 - 整体响应（PRD 3.3）
+type ListenListResponse struct {
+	// Total 总条目数
+	Total int `json:"total"`
+	// Items 监听配置项列表
+	Items []ListenItemResponse `json:"items"`
+}
+
 // GuardianStatus GuardianService 状态快照
 // 用于 /api/v1/guardian?action=status 返回当前巡检运行状态
 type GuardianStatus struct {

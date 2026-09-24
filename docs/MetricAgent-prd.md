@@ -359,6 +359,95 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 <br />
 
+### 3.3、本地监听列表查询
+
+**需求描述**：查询本地监听注册表（ListenRegistry）中当前所有已注册 Nacos 监听的二级配置项，用于运维侧快速了解节点侧配置分发状态、排查监听注册异常、确认配置落盘路径。数据源为内存中的 ListenRegistry 快照（ConfigService.registry），不实时查询 Nacos。
+
+**业务规则：**
+
+* **接口格式**：`GET /api/v1/config/listen`
+
+* **鉴权规则**：纳入统一鉴权体系，通过 `Authentication` 或 `CIB-AUTHORIZATION` 请求头校验（PRD 3.8）；**不加入鉴权白名单**（白名单仅保留 `/health`、`/api/v1/exec`、`/api/v1/guardian`）。
+
+* **Nacos 未启用时的行为**：当 `feature.enableNacos=false` 时，ConfigService 仍会创建（registry 初始化为空 map），接口正常返回 `{"total": 0, "items": []}`，不返回 503。
+
+* **数据来源**：直接读取 `ConfigService.registry.Items()` 快照，该方法内部持有 `sync.RWMutex` 读锁，并发安全、无锁冲突、响应实时。
+
+* **排序规则**：返回结果按 `group` 升序、`dataId` 升序排列，便于人工查看同一分组下的多个配置项。
+
+* **可选过滤参数**：
+
+  | 参数    | 类型   | 说明                                          |
+  | ------- | ------ | --------------------------------------------- |
+  | group   | string | 按 group 精确过滤；不传则不过滤                |
+  | dataId  | string | 按 dataId 精确过滤；不传则不过滤               |
+  | storePath | string | 按 storePath 精确过滤；不传则不过滤          |
+
+  多个过滤参数同时传入时，取 **交集**（AND 逻辑）。过滤不命中时返回空数组而非报错。
+
+**响应结构：**
+
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "itemKey": "a1b2c3d4e5f6...",
+      "configCode": "vm_agent_config",
+      "namespace": "",
+      "group": "VM_GROUP",
+      "dataId": "vm_agent.yml",
+      "suffix": ".yml",
+      "storePath": "/etc/vm/cluster/",
+      "finalName": "vm_agent.yml",
+      "reFileName": "",
+      "fileMode": "0755",
+      "reloadScript": "",
+      "enableClean": false
+    }
+  ]
+}
+```
+
+**响应字段说明（items 单条）：**
+
+| 字段         | 类型   | 说明                                                                          |
+| ------------ | ------ | ----------------------------------------------------------------------------- |
+| itemKey      | string | 注册表唯一主键（MD5），由 namespace+group+dataId+suffix+storePath+fileMode+reloadScript+reFileName 拼接生成，与 PRD 3.2.3 定义一致 |
+| configCode   | string | 配置项编号（PRD 3.2.2），用于跨清单 configCode 去重和优先级合并                 |
+| namespace    | string | Nacos 命名空间                                                                |
+| group        | string | Nacos 配置分组                                                                |
+| dataId       | string | Nacos dataId                                                                  |
+| suffix       | string | 文件后缀（PRD 3.2.2 suffix 字段，已归一化处理）                                |
+| storePath    | string | 本地存储目录路径（已自动补全末尾路径分隔符）                                   |
+| finalName    | string | 计算后的最终文件名（reFileName 非空优先，否则 dataId+suffix）                  |
+| reFileName   | string | 文件重命名配置（PRD 3.2.2），未配置时为空字符串                                |
+| fileMode     | string | 文件权限（八进制字符串，如 "0755"）                                            |
+| reloadScript | string | 重载脚本内容（PRD 3.2.2），未配置时为空字符串                                  |
+| enableClean  | bool   | 是否执行配置对齐（PRD 3.2.2），仅在按分组拉取且开启清理时为 true              |
+
+**异常处理：**
+
+| 场景                    | HTTP 状态码 | 响应                              |
+| ----------------------- | ----------- | --------------------------------- |
+| 正常查询                | 200         | 完整 JSON 响应（含 total + items）|
+| 非 GET 方法调用         | 405         | `{"code": 405, "message": "仅支持 GET 方法"}` |
+| 鉴权失败                | 401         | 复用 AuthMiddleware 的 401 响应   |
+| 过滤参数不命中          | 200         | `{"total": 0, "items": []}`       |
+
+**实现锚点：**
+
+| 文件                                      | 改动                                                                                                                                                                              |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/common/constant/constants.go`  | 新增路由常量 `RouteListen = "/api/v1/config/listen"`                                                                                                                                       |
+| `internal/model/api_model.go`            | 新增 `ListenItemResponse`（单条）和 `ListenListResponse`（整体）响应结构体                                                                                                          |
+| `internal/service/config_service.go`     | ConfigService 新增 `ListListeners(groupFilter, dataIdFilter, storePathFilter string) *ListenListResponse` 方法：内部调用 `registry.Items()` 获取快照 → 可选过滤 → 排序 → 转换为响应结构 |
+| `internal/bootstrap/server_init.go`       | 在 mux 路由注册区新增 `/api/v1/config/listen` Handler：校验 method → 调用 `configSvc.ListListeners()` → `writeJSON` 返回；`configSvc` 在所有模式下都存在（registry 为空时返回空数组）       |
+| `internal/service/auth_middleware.go`     | **无需改动**：`/api/v1/config/listen` 不走白名单，统一走 AuthMiddleware 鉴权                                                                                                              |
+
+**Prometheus 埋点策略**：本接口为轻量级只读查询（直接读取内存快照，无 I/O、无外部调用），不纳入 Prometheus 指标埋点（PRD 第六章覆盖的是配置分发、进程守护、定时任务等核心业务链路的操作型指标）。
+
+
 ### **3.4、指令下发与执行**
 
 #### **3.4.1、远程 Shell 命令执行**
@@ -841,13 +930,17 @@ log:
 #### 6.2.1 Nacos连接埋点
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- |
-| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数 | result: [success, fail] | 3.2.1 Nacos对接 | 保留`result`：区分成功、失败两分支，符合全分支计数要求 |
+| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数，覆盖三个场景：①启动时`connect()`创建ConfigClient（初始连接+后台定时重连）；②运行期`GetConfig/SearchConfig`因网络层错误导致SDK RpcClient自动重连期间的请求失败；③`ConfigClient == nil`（启动后从未连接成功） | result: [success, fail] | 3.2.1 Nacos对接 | 保留`result`：区分成功、失败两分支；**与`config_list_pull_total.fail_pull`协同去重**——Nacos连接级失败统一由本指标`fail`计数，`config_list_pull_total`检测到`ErrCodeNacosConnect`时跳过`fail_pull`，避免双重计数 |
+
+> **指标语义边界**：`fail`计数包含三类根因——①ParseNacosAddress/connect阶段TCP探测失败（初始连接层）；②GetConfig/SearchConfig返回`net.OpError`（dial tcp refused / i/o timeout / reset）或`context.DeadlineExceeded`（SDK RpcClient层）；③ConfigClient==nil（启动始终未连上）。**SDK业务错误**（鉴权失败、dataId不存在、服务端返回非连接类错误码）不计入本指标，走`config_list_pull_total.fail_pull`。
 
 
 
 #### 6.2.2 配置清单拉取指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, result_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分网络异常、解析异常、空结果三类失败场景，便于故障定位
+| `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, result_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分业务错误、解析异常、空结果三类失败场景，便于故障定位 |
+
+> **与`nacos_connect_total`协同去重**：当`GetConfig`返回`ErrCodeNacosConnect`（Nacos连接级错误，含ConfigClient==nil / net.OpError / context.DeadlineExceeded）时，`tryParseList`**跳过**`fail_pull`计数——此类场景统一由`metricagent_nacos_connect_total{result="fail"}`覆盖。`fail_pull`仅在**SDK业务错误**（鉴权失败、dataId不存在等非连接类错误）时计数。
 
 #### 6.2.3 二级配置分发与监听指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
