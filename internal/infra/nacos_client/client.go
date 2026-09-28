@@ -355,6 +355,16 @@ func (n *NacosClient) doReconnect(cfg model.NacosConfig, retryCount int, interva
 	return true
 }
 
+// IsConnected 判断 ConfigClient 是否已成功创建
+// 仅表示"启动阶段连接是否建立过"，不反映运行期 gRPC 实时健康状态。
+// 运行期连接断开由 SDK RpcClient 内部自动重连接管，调用方无需关心。
+// 2026-09-28 新增：启动阶段连接未建立时，doPullOnce 等上层逻辑应据此跳过。
+func (n *NacosClient) IsConnected() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.configClient != nil
+}
+
 // GetConfig 拉取指定 dataId + group 的配置内容
 // 直接透传 SDK 调用；连接状态由 SDK 内部 RpcClient 自动管理（重试 + healthCheck + reconnect）
 //

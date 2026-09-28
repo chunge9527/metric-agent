@@ -49,6 +49,9 @@ func (m *mockConfigCenter) CancelListener(dataId, group string) error {
 	}
 	return nil
 }
+func (m *mockConfigCenter) IsConnected() bool {
+	return true
+}
 func (m *mockConfigCenter) Close() error {
 	if m.closeFunc != nil {
 		return m.closeFunc()

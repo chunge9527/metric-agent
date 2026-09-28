@@ -1130,7 +1130,7 @@ func (s *ConfigService) pullLoop(interval time.Duration) {
 func (s *ConfigService) safeDoPullOnce() {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error("定时拉取执行 panic 已捕获，本轮跳过，下次继续", "panic", fmt.Sprint(r))
+			logger.Error("定时拉取配置执行 panic 已捕获，本轮跳过，下次继续", "panic", fmt.Sprint(r))
 		}
 	}()
 	s.doPullOnce()
@@ -1139,13 +1139,21 @@ func (s *ConfigService) safeDoPullOnce() {
 func (s *ConfigService) doPullOnce() {
 	token := s.acquireTaskLock()
 	if token == 0 {
-		logger.Warn("上一轮配置定时任务仍在执行，拒绝本轮调度")
+		logger.Warn("上一轮定时拉取配置任务仍在执行，拒绝本轮调度")
 		return
 	}
 	defer s.releaseTaskLock(token)
 
+	// 启动阶段 Nacos ConfigClient 尚未创建时，跳过本轮定时拉取
+	// 避免无效的 GetConfig/SearchConfig 调用及不必要的 nacos_connect_total 埋点
+	// 后台 reconnectLoop 仍在每 60s 重试创建 ConfigClient，成功后下次调度自然恢复
+	if !s.cc.IsConnected() {
+		logger.Debug("跳过定时拉取配置：Nacos ConfigClient 尚未创建，等待后台重连")
+		return
+	}
+
 	start := time.Now()
-	logger.Info("定时拉取：开始全量刷新配置")
+	logger.Info("定时拉取配置：开始全量刷新配置")
 
 	result, err := s.LoadConfigList()
 	if err != nil {
@@ -1155,7 +1163,7 @@ func (s *ConfigService) doPullOnce() {
 
 	s.DistributeAllConfigs(result)
 
-	logger.Info("定时拉取：全量刷新完成",
+	logger.Info("定时拉取配置：全量刷新完成",
 		"personal_dataId", result.personalDataID, "personal_ok", result.personalOK,
 		"public_dataId", result.publicDataID, "public_ok", result.publicOK,
 		"merged_count", len(result.mergedTargets),

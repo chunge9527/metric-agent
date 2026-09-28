@@ -7,6 +7,11 @@ import "metric-agent/internal/model"
 // 所有方法返回空/成功，避免typed-nil接口调用panic
 type noopConfigCenter struct{}
 
+// IsConnected 返回 true（noop 表示 Nacos 禁用，而非连接失败；拉取循环应正常执行，只是得到空结果）
+func (n *noopConfigCenter) IsConnected() bool {
+	return true
+}
+
 // GetConfig 返回空字符串（配置中心未启用）
 func (n *noopConfigCenter) GetConfig(dataId, group string) (string, error) {
 	return "", nil

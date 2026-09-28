@@ -5,6 +5,11 @@ import "metric-agent/internal/model"
 // ConfigCenter 配置中心接口
 // PRD 3.2：配置清单（个性化/公共）走定时拉取；二级配置走 Nacos 监听（ListenConfig）
 type ConfigCenter interface {
+	// IsConnected 判断 ConfigClient 是否已成功创建
+	// 注意：仅表示"启动阶段连接是否建立过"，不反映运行期 gRPC 实时健康状态；
+	// 运行期连接断开由 SDK RpcClient 内部自动重连接管，调用方无需关心
+	IsConnected() bool
+
 	// GetConfig 拉取指定 dataId + group 的配置内容
 	// dataId: 配置项的唯一标识
 	// group: 配置项所属分组
