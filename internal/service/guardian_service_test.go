@@ -1,4 +1,4 @@
-﻿package service
+package service
 
 import (
 	"context"
@@ -369,9 +369,9 @@ func TestPerformSelfHealing_HCFailAfterStart(t *testing.T) {
 	g := NewGuardianService(se, "/dev/null", 1, 60, 30)
 
 	cfg := model.GuardianConfig{HealthCheckScript: "hc", StartScript: "start"}
-	// startScript 本身成功即返回 true，拉起后 hc 失败只打日志不影响返回值
-	if !g.performSelfHealing(cfg) {
-		t.Error("startScript 成功应返回 true，即使拉起后 hc 失败")
+	// 新语义：启动脚本成功但拉起后 hc 失败 → 自愈最终失败，应返回 false
+	if g.performSelfHealing(cfg) {
+		t.Error("拉起后健康检查失败应返回 false（自愈最终失败）")
 	}
 }
 
@@ -556,13 +556,17 @@ func TestHandleComponent_HCFailNoStartScript(t *testing.T) {
 }
 
 func TestHandleComponent_HCFailStartSuccess(t *testing.T) {
+	callCount := 0
 	se := &mockGuardianShell{
 		execFunc: func(ctx context.Context, script string, args ...string) (string, string, int, error) {
-			// healthCheckScript 每次都退出码 1（失败），startScript 退出码 0（成功）
-			if script == "false" {
-				return "", "", 1, nil
+			callCount++
+			// 第1次：首次健康检查 → 失败（触发自愈）
+			// 第2次：启动脚本 → 成功
+			// 第3次：拉起后健康检查 → 成功（自愈真正成功）
+			if callCount == 1 {
+				return "", "", 1, nil // 首次 hc 失败
 			}
-			return "", "", 0, nil // startScript 成功
+			return "", "", 0, nil // startScript 成功 + 拉起后 hc 成功
 		},
 	}
 	g := NewGuardianService(se, "/dev/null", 1, 60, 30)
@@ -575,7 +579,7 @@ func TestHandleComponent_HCFailStartSuccess(t *testing.T) {
 	}
 	result := g.handleComponent(cfg, []string{"127.0.0.1"})
 	if result != componentStartSuccess {
-		t.Errorf("startScript 本身成功应 componentStartSuccess(3)，实际 %d", result)
+		t.Errorf("启动脚本成功且拉起后 hc 成功应 componentStartSuccess，实际 %v", result)
 	}
 }
 

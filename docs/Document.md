@@ -693,7 +693,7 @@ sum by (config_type, result) (rate(metricagent_config_list_pull_total[5m]))
 
 ##### ④ `metricagent_config_item_distribute_duration_seconds`（Histogram）
 
-单条二级配置完整分发流程总耗时分布。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
+单条二级配置完整分发流程总耗时分布。**Bucket**：`[0.01, 0.1, 1, 5]`（秒）。
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
@@ -760,7 +760,7 @@ sum(rate(metricagent_config_clean_trigger_total{result="skipped"}[5m]))
 
 ##### ⑥ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
 
-组件自愈全流程总耗时分布（启动脚本执行 + 拉起后健康检查）。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
+组件自愈全流程总耗时分布（启动脚本执行 + 拉起后健康检查）。**Bucket**：`[0.01, 0.1, 1, 5]`（秒）。
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |

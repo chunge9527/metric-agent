@@ -15,7 +15,7 @@
    - 保留：能区分独立业务分支、对故障定位和告警有明确价值的维度；
    - 移除：实现层面无区分度的冗余维度、与已有全局标签重复的维度。
 3. 指标前缀固定 `metricagent_`；仅允许三种类型 Counter(只增不减) / Gauge(瞬时状态值) / Histogram(耗时分布统计)。
-4. Histogram 统一 bucket：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`，单位秒；耗时统计用 `time.Since()` 转 float64 秒传入 Observe。
+4. Histogram 统一 bucket：`[0.01, 0.1, 1, 5]`，单位秒；耗时统计用 `time.Since()` 转 float64 秒传入 Observe。
 5. **埋点仅在 HTTP 服务模式启用**；指令执行模式（`--exec`）完全不初始化 Prometheus 指标、不暴露 /metrics 接口。
 6. metrics 接口复用项目现有暴露路径方案，默认 `/metrics`。
 7. **Counter 全分支计数**：每个 Counter 必须在所有分支路径（成功、失败、跳过、超时、中断）都执行 Inc()，不能只在成功分支计数。

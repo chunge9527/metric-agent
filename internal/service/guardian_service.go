@@ -243,10 +243,10 @@ type componentHandleResult int
 
 const (
 	componentSkipIPMismatch componentHandleResult = iota // IP 不匹配跳过
-	componentHCPass                                      // 健康检查通过
-	componentHCFail                                      // 健康检查失败（未自愈或无 startScript）
-	componentStartSuccess                                // 健康检查失败但启动脚本成功（自愈成功）
-	componentStartFail                                   // 健康检查失败且启动脚本失败（自愈失败）
+	componentHCPass                                      // 健康检查通过（组件存活，无需自愈）
+	componentHCFail                                      // 健康检查失败且无 startScript（无法自愈）
+	componentStartSuccess                                // 自愈成功：启动脚本成功 + 拉起后健康检查通过
+	componentStartFail                                   // 自愈失败：启动脚本失败，或启动脚本成功但拉起后健康检查仍失败
 )
 
 // isStopped 查询服务是否已停止（非阻塞）
@@ -426,6 +426,7 @@ func (g *GuardianService) performHealthCheck(cfg model.GuardianConfig) bool {
 	ctx, cancel := context.WithTimeout(g.stopCtx, time.Duration(g.healthCheckTimeout)*time.Second)
 	defer cancel()
 
+	logger.Debug("执行健康检查脚本", "component", cfg.ComponentName)
 	_, _, exitCode, err := g.se.Exec(ctx, cfg.HealthCheckScript)
 	if err != nil {
 		if g.isStopped() {
@@ -435,12 +436,18 @@ func (g *GuardianService) performHealthCheck(cfg model.GuardianConfig) bool {
 		}
 		return false
 	}
+	if exitCode != 0 {
+		logger.Warn("健康检查脚本非零退出码", "component", cfg.ComponentName, "exitCode", exitCode)
+	}
 	return exitCode == 0
 }
 
 // performSelfHealing 执行自愈逻辑（PRD 3.4.2）
-// 流程：startScript 拉起组件 → 立即执行健康检查 → 检查失败则打印错误日志
-// 返回值仅表示 startScript 本身是否成功（退出码 0 且无异常），拉起后健康检查只做日志不影响返回值
+// 流程：startScript 拉起组件 → 立即执行健康检查 → 返回自愈全流程是否成功
+// 返回值语义：true = 启动脚本成功 + 拉起后健康检查通过（自愈成功）
+//
+//	false = 启动脚本失败 / 拉起后健康检查失败 / 被停止中断（自愈最终失败）
+//
 // BUG-2 修复：两处 Shell ctx 都从 g.stopCtx 派生，Stop 时立即中断
 func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	logger.Info("执行组件自愈", "component", cfg.ComponentName)
@@ -470,6 +477,7 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	ctx, cancel := context.WithTimeout(g.stopCtx, time.Duration(g.startScriptTimeout)*time.Second)
 	defer cancel()
 
+	logger.Info("执行启动脚本", "component", cfg.ComponentName)
 	stdout, stderr, exitCode, err := g.se.Exec(ctx, cfg.StartScript)
 	if g.isStopped() {
 		// PRD 6.3.1：启动脚本被停止信号中断
@@ -505,30 +513,31 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 
 	ctx2, cancel2 := context.WithTimeout(g.stopCtx, time.Duration(g.healthCheckTimeout)*time.Second)
 	defer cancel2()
+	logger.Info("执行拉起后健康检查脚本", "component", cfg.ComponentName)
 	_, _, hcExitCode, hcErr := g.se.Exec(ctx2, cfg.HealthCheckScript)
 
 	if g.isStopped() {
 		// PRD 6.3.1：拉起后健康检查被停止信号中断
 		overallResult = "interrupted"
 		logger.Info("拉起后健康检查被停止信号中断", "component", cfg.ComponentName)
-		return true
+		return false
 	}
 	if hcErr != nil {
 		// PRD 6.3.1：拉起后健康检查执行异常
 		overallResult = "fail"
 		logger.Error("拉起后健康检查执行异常", "component", cfg.ComponentName, "error", hcErr)
-		return true
+		return false
 	}
 	if hcExitCode == 0 {
-		// PRD 6.3.1：拉起后健康检查成功
+		// PRD 6.3.1：拉起后健康检查成功 → 自愈全流程成功
 		overallResult = "success"
 		logger.Info("组件自愈成功", "component", cfg.ComponentName)
-	} else {
-		// PRD 6.3.1：拉起后健康检查仍失败
-		overallResult = "fail"
-		logger.Error("拉起后健康检查仍失败", "component", cfg.ComponentName, "exitCode", hcExitCode)
+		return true
 	}
-	return true
+	// PRD 6.3.1：拉起后健康检查仍失败 → 自愈最终失败
+	overallResult = "fail"
+	logger.Error("拉起后健康检查仍失败", "component", cfg.ComponentName, "exitCode", hcExitCode)
+	return false
 }
 
 // ============ 暂停/恢复控制方法 ============

@@ -751,14 +751,14 @@ curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/metrics
 
 > **关于计数指标的设计决策（2026-09-28）**：原本为 `metricagent_config_item_distribute_total` 和 `metricagent_guardian_self_heal_total` 分别声明了独立的 Counter，但它们的每一次 Inc() 都与同标签 Histogram 的 Observe() 严格 1:1 配对，Prometheus 规定 Histogram.Observe() 每次调用自动累加 `_count` 子序列，因此 Counter 完全冗余。两个 Counter 已移除，计数需求统一改用 `<histogram>_count`。
 
-| # | 指标名 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 1 | `metricagent_build_info` | Gauge | 组件元数据（agent_id/agent_group/agent_version，值恒为 1） |
-| 2 | `metricagent_nacos_connect_total` | Counter | Nacos 连接总次数（初始连接 + 后台重连 + 运行期 SDK RpcClient 重连） |
-| 3 | `metricagent_config_list_pull_total` | Counter | 配置清单拉取总次数（success/fail_pull/fail_parse/config_empty） |
-| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 单条配置分发耗时分布（标签：config_code, result；计数由 `_count` 替代已移除的 Counter） |
-| 5 | `metricagent_config_clean_trigger_total` | Counter | 配置清理触发次数 |
-| 6 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 组件自愈全流程耗时分布（计数由 `_count` 替代已移除的 Counter） |
+| # | 指标名 | 类型 | Bucket | 说明 |
+| --- | --- | --- | --- | --- |
+| 1 | `metricagent_build_info` | Gauge | — | 组件元数据（agent_id/agent_group/agent_version，值恒为 1） |
+| 2 | `metricagent_nacos_connect_total` | Counter | — | Nacos 连接总次数（初始连接 + 后台重连 + 运行期 SDK RpcClient 重连） |
+| 3 | `metricagent_config_list_pull_total` | Counter | — | 配置清单拉取总次数（success/fail_pull/fail_parse/config_empty） |
+| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | `[0.01, 0.1, 1, 5]` | 单条配置分发耗时分布（标签：config_code, result；计数由 `_count` 替代已移除的 Counter） |
+| 5 | `metricagent_config_clean_trigger_total` | Counter | — | 配置清理触发次数 |
+| 6 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | `[0.01, 0.1, 1, 5]` | 组件自愈全流程耗时分布（计数由 `_count` 替代已移除的 Counter） |
 
 > **协同去重**：Nacos 连接级失败统一由 `metricagent_nacos_connect_total{result="fail"}` 覆盖，`config_list_pull_total` 检测到连接错误时跳过 `fail_pull` 计数。
 

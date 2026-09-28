@@ -23,10 +23,10 @@ const LabelAgentVersion = "agent_version"
 // buildInfoLabels metricagent_build_info 指标专用标签
 var buildInfoLabels = []string{LabelAgentID, LabelAgentGroup, LabelAgentVersion}
 
-// ============ Histogram 固定 bucket（PRD 硬性约束） ============
+// ============ Histogram 固定 bucket ============
 
-// HistogramBuckets 统一 bucket：[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60] 单位秒
-var HistogramBuckets = []float64{0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60}
+// HistogramBuckets 统一 bucket：[0.01, 0.1, 1, 5] 单位秒
+var HistogramBuckets = []float64{0.01, 0.1, 1, 5}
 
 // ============ 指标变量声明 ============
 
