@@ -603,18 +603,18 @@ curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/metrics
 
 #### 1.8.2 指标总览
 
-共 **8 个** 自定义业务指标，前缀统一为 `metricagent_`：
+共 **6 个** 自定义业务指标，前缀统一为 `metricagent_`：
+
+> **关于计数指标的设计决策（2026-09-28）**：原本为 `metricagent_config_item_distribute_total` 和 `metricagent_guardian_self_heal_total` 分别声明了独立的 Counter，但它们的每一次 Inc() 都与同标签 Histogram 的 Observe() 严格 1:1 配对。Prometheus 规定 Histogram.Observe() 每次调用自动累加 `_count` 子序列，因此 Counter 完全可以被 Histogram 的 `_count` 替代。为避免冗余埋点，两个 Counter 已移除，需要计数时改用 `<histogram>_count`。
 
 | # | 指标名 | 类型 | 标签数 | 归属模块 |
 | --- | --- | --- | --- | --- |
 | 1 | `metricagent_build_info` | Gauge | 3 | 组件元数据 |
 | 2 | `metricagent_nacos_connect_total` | Counter | 1 | 配置分发 |
 | 3 | `metricagent_config_list_pull_total` | Counter | 2 | 配置分发 |
-| 4 | `metricagent_config_item_distribute_total` | Counter | 1 | 配置分发 |
-| 5 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 1 | 配置分发 |
-| 6 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
-| 7 | `metricagent_guardian_self_heal_total` | Counter | 3 | 进程守护 |
-| 8 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
+| 4 | `metricagent_config_item_distribute_duration_seconds` | Histogram | 2 | 配置分发 |
+| 5 | `metricagent_config_clean_trigger_total` | Counter | 1 | 配置分发 |
+| 6 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | 2 | 进程守护 |
 
 > **关于 `agent_id` / `agent_group` / `agent_version` 标签**：PRD 规定这三个标签**仅在 `metricagent_build_info` 中携带**，其他业务指标不需要重复携带——多实例版本识别、故障溯源统一通过 `build_info` 完成。
 
@@ -678,7 +678,7 @@ sum(metricagent_nacos_connect_total{result="success"}) > 0
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
 | `config_type` | `personal` / `public` | 个性化配置清单 / 公共配置清单，两次独立拉取动作 |
-| `result` | `success` / `fail_pull` / `fail_parse` / `result_empty` | 拉取成功 / 业务层错误（鉴权、dataId不存在等） / YAML 解析失败 / 拉取成功但内容为空或解析结果为空数组 |
+| `result` | `success` / `fail_pull` / `fail_parse` / `config_empty` | 拉取成功 / 业务层错误（鉴权、dataId不存在等） / YAML 解析失败 / 拉取成功但内容为空或解析结果为空数组 |
 
 **PromQL 查询示例**：
 ```promql
@@ -691,88 +691,74 @@ rate(metricagent_config_list_pull_total{config_type="public"}[5m])
 sum by (config_type, result) (rate(metricagent_config_list_pull_total[5m]))
 ```
 
-##### ④ `metricagent_config_item_distribute_total`（Counter）
-
-二级配置分发处理总次数。触发时机：
-- 定时拉取循环中 `DistributeAllConfigs` 对每条二级配置的处理
-- Nacos 配置变更监听回调 `handleListenerCallback` 中的分发处理
-
-| 标签 | 枚举值 | 说明 |
-| --- | --- | --- |
-| `result` | `success` / `fail` / `skipped` | 分发成功（拉取+写文件+重载脚本+注册监听全成功） / 分发失败（任一步骤失败） / 已存在于注册表跳过 |
-
-**PromQL 查询示例**：
-```promql
-# 配置分发成功率
-rate(metricagent_config_item_distribute_total{result="success"}[5m])
-/
-rate(metricagent_config_item_distribute_total[5m])
-```
-
-##### ⑤ `metricagent_config_item_distribute_duration_seconds`（Histogram）
+##### ④ `metricagent_config_item_distribute_duration_seconds`（Histogram）
 
 单条二级配置完整分发流程总耗时分布。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
-| `result` | `success` / `fail` / `skipped` | 与 ③ 同标签；`skipped` 场景耗时固定记 0 |
+| `config_code` | 配置清单中每条二级配置项的 `configCode` 字段（PRD 3.2.2 必填） | 按配置项编号维度看耗时和成功率，用于定位"哪条配置慢/失败多" |
+| `result` | `success` / `fail_pull_config` / `fail_write` / `fail_listen` / `fail_script` | 见下方语义表。**已存在于注册表的跳过场景（skipped）不埋点** |
+
+**`result` 标签语义表（2026-09-28 细化）**：
+
+| result 值 | 链路阶段 | 分类 | bizOK 计数 | 语义说明 |
+| --- | --- | --- | --- | --- |
+| `success` | 全链路 | 成功 | success++ | GetConfig + writeConfig + runReloadScript + AddListener 全部成功 |
+| `fail_pull_config` | GetConfig | 硬失败 | failed++ | 拉取配置网络/业务失败，或返回空内容——**配置未落盘** |
+| `fail_write` | writeConfig | 硬失败 | failed++ | 原子写文件失败 / 监听回调删文件失败——文件 I/O 层 |
+| `fail_listen` | AddListener | 硬失败 | failed++ | 注册 Nacos 监听失败——监听未建立，下一轮定时拉取重试 |
+| `fail_script` | runReloadScript | **软失败** | **success++** | 配置已落盘 + 监听已注册，仅重载脚本执行失败（exec error / exitCode≠0 / panic），不影响业务流程 |
+
+> **硬失败 vs 软失败**：硬失败导致配置未落盘或监听未注册，需等下一轮定时拉取完整重试；软失败（`fail_script`）配置已正确落盘，仅外部通知脚本失败，属于可观测但不阻塞业务的降级场景。**告警规则应分级处理**：`fail_pull_config`/`fail_write`/`fail_listen` 应设高优告警；`fail_script` 可设低优或仅记录。
+
+> **优先级规则（processTarget 内部）**：reloadScript 在 AddListener **之前**执行。若脚本软失败但后续 AddListener 硬失败，硬失败标签 `fail_listen` 覆盖 `fail_script`——此时配置未落盘，脚本结果无意义。
+
+> **计数查询**：该指标已移除独立的 `metricagent_config_item_distribute_total` Counter（每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，完全冗余）。计数需求统一改用 `metricagent_config_item_distribute_duration_seconds_count`。
 
 **PromQL 查询示例**：
 ```promql
-# 二级配置分发 P99 耗时（成功分支）
+# 配置分发成功率（用 _count 子序列替代已移除的 Counter）
+rate(metricagent_config_item_distribute_duration_seconds_count{result="success"}[5m])
+/
+rate(metricagent_config_item_distribute_duration_seconds_count[5m])
+
+# 硬失败率（不含软失败 fail_script）——真正影响业务的失败
+rate(metricagent_config_item_distribute_duration_seconds_count{result=~"fail_pull_config|fail_write|fail_listen"}[5m])
+/
+rate(metricagent_config_item_distribute_duration_seconds_count[5m])
+
+# 按失败类型分组的故障分布（定位瓶颈在哪个链路阶段）
+sum by (result) (rate(metricagent_config_item_distribute_duration_seconds_count{result=~"fail_.*"}[5m]))
+
+# 二级配置分发 P99 耗时（成功分支，按 config_code 聚合）
 histogram_quantile(0.99,
-  rate(metricagent_config_item_distribute_duration_seconds_bucket{result="success"}[5m])
+  sum by (le, config_code) (
+    rate(metricagent_config_item_distribute_duration_seconds_bucket{result="success"}[5m])
+  )
 )
 
-# 分发耗时分布直方图（失败 vs 成功）
+# 分发耗时分布直方图（全 result 维度拆开看）
 histogram_quantile(0.5,
-  sum by (le, result) (rate(metricagent_config_item_distribute_duration_seconds_bucket[5m]))
+  sum by (le, config_code, result) (rate(metricagent_config_item_distribute_duration_seconds_bucket[5m]))
 )
 ```
 
-##### ⑥ `metricagent_config_clean_trigger_total`（Counter）
+##### ⑤ `metricagent_config_clean_trigger_total`（Counter）
 
 配置清理触发次数。
 
 | 标签 | 枚举值 | 说明 |
 | --- | --- | --- |
-| `result` | `success` / `skipped_high_risk` | 清理正常执行 / storePath 命中高危目录黑名单跳过 |
+| `result` | `success` / `skipped` | 清理正常执行 / storePath 命中高危目录黑名单跳过 |
 
 **PromQL 查询示例**：
 ```promql
 # 配置清理被高危目录拦截的次数
-sum(rate(metricagent_config_clean_trigger_total{result="skipped_high_risk"}[5m]))
+sum(rate(metricagent_config_clean_trigger_total{result="skipped"}[5m]))
 ```
 
-##### ⑦ `metricagent_guardian_self_heal_total`（Counter）
-
-组件自愈执行次数（processTarget 中健康检查失败后触发自愈时计数）。
-
-| 标签 | 枚举值 | 说明 |
-| --- | --- | --- |
-| `component_name` | 守护配置中的组件名 | 按组件维度统计 |
-| `heal_result` | `success` / `fail` / `interrupted` | 启动脚本执行结果：成功 / 执行异常或非零退出码 / 被停止信号中断 |
-| `health_result` | `success` / `fail` / `interrupted` | 拉起后健康检查结果：成功 / 执行异常或非零退出码 / 被停止信号中断 |
-
-> **注意**：`heal_result` 和 `health_result` 是**独立标签**，`heal_result=success` 但 `health_result=fail` 表示"启动脚本成功拉起但健康检查仍不过"——这是最需要告警的自愈场景。
-
-**PromQL 查询示例**：
-```promql
-# 组件自愈成功率（heal_result + health_result 都为 success）
-sum by (component_name) (
-  rate(metricagent_guardian_self_heal_total{heal_result="success", health_result="success"}[5m])
-)
-/
-sum by (component_name) (
-  rate(metricagent_guardian_self_heal_total[5m])
-)
-
-# 告警：启动成功但健康检查仍失败（最需要关注）
-metricagent_guardian_self_heal_total{heal_result="success", health_result="fail"}
-> metricagent_guardian_self_heal_total offset 5m
-```
-
-##### ⑧ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
+##### ⑥ `metricagent_guardian_self_heal_duration_seconds`（Histogram）
 
 组件自愈全流程总耗时分布（启动脚本执行 + 拉起后健康检查）。**Bucket**：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]`（秒）。
 
@@ -781,8 +767,19 @@ metricagent_guardian_self_heal_total{heal_result="success", health_result="fail"
 | `component_name` | 守护配置中的组件名 | 按组件维度统计耗时 |
 | `result` | `success` / `fail` / `interrupted` | 自愈整体结果 |
 
+> **计数查询**：该指标已移除独立的 `metricagent_guardian_self_heal_total` Counter（每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对）。计数需求统一改用 `metricagent_guardian_self_heal_duration_seconds_count`。
+
 **PromQL 查询示例**：
 ```promql
+# 组件自愈成功率（用 _count 子序列替代已移除的 Counter）
+sum by (component_name) (
+  rate(metricagent_guardian_self_heal_duration_seconds_count{result="success"}[5m])
+)
+/
+sum by (component_name) (
+  rate(metricagent_guardian_self_heal_duration_seconds_count[5m])
+)
+
 # 按组件名的自愈 P95 耗时
 histogram_quantile(0.95,
   sum by (le, component_name) (

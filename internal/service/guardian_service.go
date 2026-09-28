@@ -445,30 +445,22 @@ func (g *GuardianService) performHealthCheck(cfg model.GuardianConfig) bool {
 func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	logger.Info("执行组件自愈", "component", cfg.ComponentName)
 
-	// PRD 6.3.1 Prometheus 埋点：自愈耗时 + 计数
+	// PRD 6.3.1 Prometheus 埋点：自愈耗时分布（计数已由 _count 替代）
 	selfHealStart := time.Now()
 
 	// 提前声明埋点结果标签值，defer 中统一上报
 	// 初始值赋 "fail"：正常路径在各分支显式重写；panic 路径由 recover defer 设置为合法值
-	var healResult, healthResult, overallResult = "fail", "fail", "fail"
+	var overallResult = "fail"
 	defer func() {
 		// panic 防御：确保 defer 上报的标签值是合法枚举，不是空字符串
 		if r := recover(); r != nil {
 			logger.Error("自愈流程 panic 已捕获",
 				"component", cfg.ComponentName,
 				"panic", fmt.Sprint(r))
-			healResult = "fail"
-			healthResult = "fail"
 			overallResult = "fail"
 		}
 		duration := time.Since(selfHealStart).Seconds()
-		// PRD 6.3.1，指标语义：组件自愈执行次数
-		metrics.GuardianSelfHealTotal.With(prometheus.Labels{
-			"component_name": cfg.ComponentName,
-			"heal_result":    healResult,
-			"health_result":  healthResult,
-		}).Inc()
-		// PRD 6.3.1，指标语义：组件自愈全流程耗时分布
+		// PRD 6.3.1，指标语义：组件自愈全流程耗时分布（计数已由 _count 替代）
 		metrics.GuardianSelfHealDuration.With(prometheus.Labels{
 			"component_name": cfg.ComponentName,
 			"result":         overallResult,
@@ -481,13 +473,13 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	stdout, stderr, exitCode, err := g.se.Exec(ctx, cfg.StartScript)
 	if g.isStopped() {
 		// PRD 6.3.1：启动脚本被停止信号中断
-		healResult, healthResult, overallResult = "interrupted", "interrupted", "interrupted"
+		overallResult = "interrupted"
 		logger.Info("启动脚本被停止信号中断", "component", cfg.ComponentName)
 		return false
 	}
 	if err != nil {
 		// PRD 6.3.1：启动脚本执行异常
-		healResult, healthResult, overallResult = "fail", "fail", "fail"
+		overallResult = "fail"
 		logger.Error("启动脚本执行异常",
 			"component", cfg.ComponentName,
 			"error", err,
@@ -498,7 +490,7 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 	}
 	if exitCode != 0 {
 		// PRD 6.3.1：启动脚本非零退出码
-		healResult, healthResult, overallResult = "fail", "fail", "fail"
+		overallResult = "fail"
 		logger.Error("启动脚本非零退出码",
 			"component", cfg.ComponentName,
 			"exitCode", exitCode,
@@ -508,8 +500,7 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 		return false
 	}
 
-	// 启动脚本成功（heal_result = success），执行拉起后健康检查
-	healResult = "success"
+	// 启动脚本成功，执行拉起后健康检查
 	logger.Info("启动脚本执行成功，立即执行拉起后健康检查", "component", cfg.ComponentName)
 
 	ctx2, cancel2 := context.WithTimeout(g.stopCtx, time.Duration(g.healthCheckTimeout)*time.Second)
@@ -518,23 +509,23 @@ func (g *GuardianService) performSelfHealing(cfg model.GuardianConfig) bool {
 
 	if g.isStopped() {
 		// PRD 6.3.1：拉起后健康检查被停止信号中断
-		healthResult, overallResult = "interrupted", "interrupted"
+		overallResult = "interrupted"
 		logger.Info("拉起后健康检查被停止信号中断", "component", cfg.ComponentName)
 		return true
 	}
 	if hcErr != nil {
 		// PRD 6.3.1：拉起后健康检查执行异常
-		healthResult, overallResult = "fail", "fail"
+		overallResult = "fail"
 		logger.Error("拉起后健康检查执行异常", "component", cfg.ComponentName, "error", hcErr)
 		return true
 	}
 	if hcExitCode == 0 {
 		// PRD 6.3.1：拉起后健康检查成功
-		healthResult, overallResult = "success", "success"
+		overallResult = "success"
 		logger.Info("组件自愈成功", "component", cfg.ComponentName)
 	} else {
 		// PRD 6.3.1：拉起后健康检查仍失败
-		healthResult, overallResult = "fail", "fail"
+		overallResult = "fail"
 		logger.Error("拉起后健康检查仍失败", "component", cfg.ComponentName, "exitCode", hcExitCode)
 	}
 	return true

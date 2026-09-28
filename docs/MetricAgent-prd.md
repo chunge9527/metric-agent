@@ -938,22 +938,25 @@ log:
 
 #### 6.2.2 配置清单拉取指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, result_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分业务错误、解析异常、空结果三类失败场景，便于故障定位 |
+| `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, config_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分业务错误、解析异常、空结果三类失败场景，便于故障定位 |
 
 > **与`nacos_connect_total`协同去重**：当`GetConfig`返回`ErrCodeNacosConnect`（Nacos连接级错误，含ConfigClient==nil / net.OpError / context.DeadlineExceeded）时，`tryParseList`**跳过**`fail_pull`计数——此类场景统一由`metricagent_nacos_connect_total{result="fail"}`覆盖。`fail_pull`仅在**SDK业务错误**（鉴权失败、dataId不存在等非连接类错误）时计数。
 
 #### 6.2.3 二级配置分发与监听指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `metricagent_config_item_distribute_total` | Counter | `result` | 二级配置分发处理总次数 | result: [success, fail, skipped] | 3.2.3 二级配置分发 | 保留`result`：区分成功、失败、已存在跳过三类分支，符合全分支计数要求 |
-| `metricagent_config_item_distribute_duration_seconds` | Histogram | `result` | 单条二级配置完整分发流程总耗时（包含拉取配置、写文件、重载脚本、注册监听）分布 | result: [success, fail, skipped] | 3.2.3 二级配置分发 | 保留`result`：区分不同处理结果的耗时；统一使用全局标准bucket，用于监控分发链路性能、定位慢配置问题 |
+| `metricagent_config_item_distribute_duration_seconds` | Histogram | `config_code,result` | 单条二级配置完整分发流程总耗时（包含拉取配置、写文件、重载脚本、注册监听）分布 | config_code: 配置项编号（PRD 3.2.2 必填）<br>result: [success, fail_pull_config, fail_write, fail_listen, fail_script]（skipped 场景不埋点）<br>• success: 全链路成功<br>• fail_pull_config: GetConfig 失败或空内容（硬失败）<br>• fail_write: 写文件/删文件失败（硬失败）<br>• fail_listen: AddListener 注册监听失败（硬失败）<br>• fail_script: reloadScript 软失败（配置已落盘+监听已注册，仅脚本执行通知失败） | 3.2.3 二级配置分发 | 保留`config_code`：按配置项编号维度统计耗时，可定位哪条配置慢/失败多；<br>保留`result`：细化为 4 个失败子类型，可精准定位瓶颈在拉取/写文件/监听注册/脚本执行哪个链路阶段；<br>统一使用全局标准bucket，用于监控分发链路性能、定位慢配置问题 |
+
+> **2026-09-28 细化** `result` 标签：原 `success/fail` 两值细化为 `success/fail_pull_config/fail_write/fail_listen/fail_script` 五值。硬失败（`fail_pull_config`/`fail_write`/`fail_listen`）计入 failed 计数，需下一轮定时拉取重试；软失败（`fail_script`）计入 success 计数——配置已正确落盘且监听已注册，仅重载脚本执行通知失败，不影响业务流程。告警规则应分级处理：硬失败设高优告警，软失败设低优或仅记录。
+
+> **2026-09-28 移除** `metricagent_config_item_distribute_total` Counter：每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数需求改用 `metricagent_config_item_distribute_duration_seconds_count`。
 
 
 
 #### 6.2.4 配置清理指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `metricagent_config_clean_trigger_total` | Counter | `result` | 配置清理触发次数 | result: [success, skipped_high_risk] | 3.2.4 配置清理执行约束 | 保留`result`：覆盖正常执行、命中高危目录四类分支 |
+| `metricagent_config_clean_trigger_total` | Counter | `result` | 配置清理触发次数 | result: [success, skipped] | 3.2.4 配置清理执行约束 | 保留`result`：覆盖正常执行、命中高危目录四类分支 |
 
 
 ### 6.3 进程守护模块埋点（关联原PRD：3.5 进程守护全章节）
@@ -961,5 +964,6 @@ log:
 
 #### 6.3.1 健康检查与自愈指标
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| `metricagent_guardian_self_heal_total` | Counter | `component_name,heal_result,health_result` | 组件自愈执行次数 | component_name: [组件名]<br>heal_result: [success, fail, interrupted]<br>health_result: [success, fail, interrupted] | 3.5.2 自愈逻辑 | 保留`component_name`：按组件维度统计；<br>保留`heal_result`：启动脚本执行结果；<br>保留`health_result`：拉起后健康检查结果 
 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | `component_name,result` | 组件自愈全流程（启动脚本执行+拉起后健康检查）总耗时分布 | component_name: [组件名]<br>result: [success, fail, interrupted] | 3.5.2 自愈逻辑 | 保留`component_name`：按组件维度统计耗时，便于定位性能瓶颈；<br>保留`result`：区分不同执行结果下的耗时分布，辅助故障与性能联合排查；统一使用全局标准bucket |
+
+> **2026-09-28 移除** `metricagent_guardian_self_heal_total` Counter：每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数需求改用 `metricagent_guardian_self_heal_duration_seconds_count`。

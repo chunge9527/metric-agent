@@ -39,7 +39,7 @@ type AgentConfig struct {
 
 // AgentInfo 节点基础信息
 type AgentInfo struct {
-	// ID 节点唯一标识，必填，仅允许字母、数字、下划线、横线
+	// ID 节点唯一标识，非必填；未配置或为空时自动生成 UUID v4（小写）
 	ID string `yaml:"id" json:"id"`
 	// Group 节点分组（可选，用于多 Agent 分组管理）
 	Group string `yaml:"group" json:"group"`

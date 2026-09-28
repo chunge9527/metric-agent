@@ -273,10 +273,8 @@ func init() {
 | GaugeVec | `metricagent_build_info` | GaugeVec | 3 | `agent_id, agent_group, agent_version` |
 | CounterVec | `metricagent_nacos_connect_total` | CounterVec | 1 | `result` |
 | CounterVec | `metricagent_config_list_pull_total` | CounterVec | 2 | `config_type, result` |
-| CounterVec | `metricagent_config_item_distribute_total` | CounterVec | 1 | `result` |
-| HistogramVec | `metricagent_config_item_distribute_duration_seconds` | HistogramVec | 1 | `result` |
+| HistogramVec | `metricagent_config_item_distribute_duration_seconds` | HistogramVec | 2 | `config_code, result` |
 | CounterVec | `metricagent_config_clean_trigger_total` | CounterVec | 1 | `result` |
-| CounterVec | `metricagent_guardian_self_heal_total` | CounterVec | 3 | `component_name, heal_result, health_result` |
 | HistogramVec | `metricagent_guardian_self_heal_duration_seconds` | HistogramVec | 2 | `component_name, result` |
 
 Histogram 统一 bucket：`[0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60]` 秒。
@@ -303,10 +301,8 @@ DefaultRegisterer.collectorsByID (HTTP 模式)
   ├── BuildInfo                → metricagent_build_info
   ├── NacosConnectTotal        → metricagent_nacos_connect_total
   ├── ConfigListPullTotal      → metricagent_config_list_pull_total
-  ├── ConfigItemDistributeTotal → metricagent_config_item_distribute_total
   ├── ConfigItemDistributeDuration → metricagent_config_item_distribute_duration_seconds
   ├── ConfigCleanTriggerTotal  → metricagent_config_clean_trigger_total
-  ├── GuardianSelfHealTotal    → metricagent_guardian_self_heal_total
   └── GuardianSelfHealDuration → metricagent_guardian_self_heal_duration_seconds
 ```
 
@@ -332,16 +328,18 @@ DefaultRegisterer.collectorsByID (HTTP 模式)
 |---|---|---|---|
 | `metricagent_nacos_connect_total` | CounterVec | `result` | nacos_client.connect() defer |
 | `metricagent_config_list_pull_total` | CounterVec | `config_type, result` | config_service.tryParseList() |
-| `metricagent_config_item_distribute_total` | CounterVec | `result` | DistributeAllConfigs + handleListenerCallback |
-| `metricagent_config_item_distribute_duration_seconds` | HistogramVec | `result` | 同上，Observe(0) 或 time.Since() |
+| `metricagent_config_item_distribute_duration_seconds` | HistogramVec | `config_code, result` | DistributeAllConfigs + handleListenerCallback，仅实际执行分发时 Observe(time.Since())，skipped 场景不埋点 |
 | `metricagent_config_clean_trigger_total` | CounterVec | `result` | config_service.cleanStorePath() |
 
-### 4.3 进程守护模块（2 个）
+> **已移除** `metricagent_config_item_distribute_total` Counter：每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数改用 `metricagent_config_item_distribute_duration_seconds_count`。
+
+### 4.3 进程守护模块（1 个）
 
 | 指标名 | 类型 | 标签 | 触发位置 |
 |---|---|---|---|
-| `metricagent_guardian_self_heal_total` | CounterVec | `component_name, heal_result, health_result` | performSelfHealing() defer |
 | `metricagent_guardian_self_heal_duration_seconds` | HistogramVec | `component_name, result` | performSelfHealing() defer |
+
+> **已移除** `metricagent_guardian_self_heal_total` Counter：同上理由，每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数改用 `metricagent_guardian_self_heal_duration_seconds_count`。
 
 ### 4.4 Histogram 统一 bucket
 
@@ -438,7 +436,7 @@ defer func() {
 var listenerResult string
 defer func() {
     // 先注册，后执行（LIFO）
-    metrics.ConfigItemDistributeTotal.With(...).Inc()
+    metrics.ConfigItemDistributeDuration.With(...).Observe(time.Since(listenerStart).Seconds())
 }()
 defer func() {
     // 后注册，先执行 —— recover 先把 listenerResult 设为 "fail"

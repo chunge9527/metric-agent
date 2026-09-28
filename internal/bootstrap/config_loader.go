@@ -2,6 +2,7 @@
 package bootstrap
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,12 +89,7 @@ func GetExecDir() string {
 
 // validateConfig 配置校验
 func validateConfig(cfg *model.AgentConfig) error {
-	// agent_id必填校验
-	if strings.TrimSpace(cfg.Agent.ID) == "" {
-		return fmt.Errorf("agent.id为必填字段，不能为空")
-	}
-
-	// agent.id格式校验
+	// agent.id 格式校验（非必填，fillDefaults 会自动生成 UUID）
 	if !agentIDRegex.MatchString(cfg.Agent.ID) {
 		return fmt.Errorf("agent.id格式错误: %s，仅允许字母、数字、下划线、横线", cfg.Agent.ID)
 	}
@@ -134,6 +130,11 @@ func validateConfig(cfg *model.AgentConfig) error {
 // fillDefaults 填充默认值
 // Feature开关使用 bool 零值（false），未配置即默认关闭，无需回填
 func fillDefaults(cfg *model.AgentConfig) {
+	// agent.id 非必填：为空时自动生成 UUID v4（小写，含横线）
+	if strings.TrimSpace(cfg.Agent.ID) == "" {
+		cfg.Agent.ID = generateUUIDv4()
+	}
+
 	// nacos.group 默认值（Nacos SDK 内部默认就是 DEFAULT_GROUP）
 	if cfg.Nacos.Group == "" {
 		cfg.Nacos.Group = myconstant.DefaultNacosGroup
@@ -213,4 +214,33 @@ func isValidLogLevel(level string) bool {
 		}
 	}
 	return false
+}
+
+// generateUUIDv4 生成 UUID v4（全小写，含横线）
+// 使用 crypto/rand 无外部依赖；格式：xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+// 第3段首字符固定为 '4'，第4段首字符为 '8'/'9'/'a'/'b'
+func generateUUIDv4() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// crypto/rand 读取失败理论上极罕见；降级使用时间戳+pid拼接保证不为空
+		return fmt.Sprintf("agent-fallback-%d", os.Getpid())
+	}
+	// 设置 UUID v4 版本位
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	// 设置 UUID v4 变体位（RFC 4122）
+	buf[8] = (buf[8] & 0x3f) | 0x80
+
+	const hex = "0123456789abcdef"
+	out := make([]byte, 36)
+	idx := 0
+	for i, b := range buf {
+		if i == 4 || i == 6 || i == 8 || i == 10 {
+			out[idx] = '-'
+			idx++
+		}
+		out[idx] = hex[b>>4]
+		out[idx+1] = hex[b&0x0f]
+		idx += 2
+	}
+	return string(out)
 }

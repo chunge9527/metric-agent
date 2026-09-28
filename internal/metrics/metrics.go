@@ -43,30 +43,31 @@ var (
 	NacosConnectTotal *prometheus.CounterVec
 
 	// ConfigListPullTotal 配置清单拉取总次数（覆盖网络拉取、YAML解析、空结果全分支）
-	// 标签：config_type[personal/public], result[success/fail_pull/fail_parse/result_empty]
+	// 标签：config_type[personal/public], result[success/fail_pull/fail_parse/config_empty]
 	ConfigListPullTotal *prometheus.CounterVec
 
-	// ConfigItemDistributeTotal 二级配置分发处理总次数
-	// 标签：result[success/fail/skipped]
-	ConfigItemDistributeTotal *prometheus.CounterVec
-
 	// ConfigItemDistributeDuration 单条二级配置完整分发流程总耗时分布
-	// 标签：result[success/fail/skipped]
+	// 标签：config_code（配置项编号，PRD 3.2.2 必填字段）, result
+	// result 取值：
+	//   success         —— 全链路成功（GetConfig + writeConfig + runReloadScript + AddListener）
+	//   fail_pull_config —— GetConfig 网络/业务失败或返回空内容（硬失败，配置未落盘）
+	//   fail_write      —— writeConfig 原子写文件失败 / 监听回调删文件失败（硬失败）
+	//   fail_listen   —— AddListener 注册 Nacos 监听失败（硬失败）
+	//   fail_script     —— reloadScript 执行失败（软失败：配置已落盘+监听已注册，仅脚本执行通知失败）
+	// 注：skipped（配置已不在注册表）场景不埋点
+	// 注：计数已由 _count 子序列替代，不再单独声明 CounterVec
 	ConfigItemDistributeDuration *prometheus.HistogramVec
 
 	// ConfigCleanTriggerTotal 配置清理触发次数
-	// 标签：result[success/skipped_high_risk]
+	// 标签：result[success/skipped]
 	ConfigCleanTriggerTotal *prometheus.CounterVec
 )
 
 // 6.3 进程守护模块
 var (
-	// GuardianSelfHealTotal 组件自愈执行次数
-	// 标签：component_name, heal_result[success/fail/interrupted], health_result[success/fail/interrupted]
-	GuardianSelfHealTotal *prometheus.CounterVec
-
 	// GuardianSelfHealDuration 组件自愈全流程总耗时分布
 	// 标签：component_name, result[success/fail/interrupted]
+	// 注：计数已由 _count 子序列替代，不再单独声明 CounterVec
 	GuardianSelfHealDuration *prometheus.HistogramVec
 )
 
@@ -96,16 +97,12 @@ func init() {
 	}, []string{"config_type", "result"})
 
 	// 6.2.2 二级配置分发与监听（仅业务标签：result）
-	ConfigItemDistributeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "metricagent_config_item_distribute_total",
-		Help: "二级配置分发处理总次数",
-	}, []string{"result"})
-
+	// 注：ConfigItemDistributeTotal 已移除，计数由 Histogram 的 _count 子序列替代
 	ConfigItemDistributeDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "metricagent_config_item_distribute_duration_seconds",
-		Help:    "单条二级配置完整分发流程总耗时（包含拉取配置、写文件、重载脚本、注册监听）分布",
+		Help:    "单条二级配置完整分发流程总耗时（包含拉取配置、写文件、重载脚本、注册监听）分布；result 标签取值：success 全链路成功；fail_pull_config 拉取配置失败；fail_write 写文件失败；fail_listen 注册监听失败；fail_script 重载脚本软失败（配置已落盘+监听已注册，仅脚本执行通知失败）",
 		Buckets: HistogramBuckets,
-	}, []string{"result"})
+	}, []string{"config_code", "result"})
 
 	// 6.2.3 配置清理（仅业务标签：result）
 	ConfigCleanTriggerTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -114,11 +111,7 @@ func init() {
 	}, []string{"result"})
 
 	// 6.3.1 健康检查与自愈（仅业务标签）
-	GuardianSelfHealTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "metricagent_guardian_self_heal_total",
-		Help: "组件自愈执行次数",
-	}, []string{"component_name", "heal_result", "health_result"})
-
+	// 注：GuardianSelfHealTotal 已移除，计数由 Histogram 的 _count 子序列替代
 	GuardianSelfHealDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "metricagent_guardian_self_heal_duration_seconds",
 		Help:    "组件自愈全流程（启动脚本执行+拉起后健康检查）总耗时分布",
@@ -144,10 +137,8 @@ func EnableMetrics() {
 		BuildInfo,
 		NacosConnectTotal,
 		ConfigListPullTotal,
-		ConfigItemDistributeTotal,
 		ConfigItemDistributeDuration,
 		ConfigCleanTriggerTotal,
-		GuardianSelfHealTotal,
 		GuardianSelfHealDuration,
 	)
 }

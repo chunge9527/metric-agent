@@ -294,7 +294,7 @@ func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigL
 	if strings.TrimSpace(content) == "" {
 		logger.Warn("配置清单内容为空，视为失败", "source", source, "dataId", dataID)
 		// PRD 6.2.1，指标语义：拉取成功但内容为空
-		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "result_empty"}).Inc()
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "config_empty"}).Inc()
 		return nil, false
 	}
 
@@ -309,7 +309,7 @@ func (s *ConfigService) tryParseList(dataID, source string) (model.MetricConfigL
 	if len(configs) == 0 {
 		logger.Warn("配置清单解析结果为空数组，视为失败", "source", source, "dataId", dataID)
 		// PRD 6.2.1，指标语义：解析成功但结果为空数组
-		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "result_empty"}).Inc()
+		metrics.ConfigListPullTotal.With(prometheus.Labels{"config_type": source, "result": "config_empty"}).Inc()
 		return nil, false
 	}
 
@@ -373,7 +373,9 @@ func (s *ConfigService) expandAndDedup(configs model.MetricConfigList) (map[stri
 			}
 			// DataId 为空时 reFileName 没有意义，用局部 copy 避免修改原 config
 			cfgCopy := *cfg
+			// DataId 为空时 ReFileName 和 ReloadScript 不生效
 			cfgCopy.ReFileName = ""
+			cfgCopy.ReloadScript = ""
 			for _, dataId := range dataIds {
 				t := s.buildTarget(storePath, &cfgCopy, dataId)
 				key := t.itemKey()
@@ -462,27 +464,23 @@ func (s *ConfigService) DistributeAllConfigs(result *configListResult) {
 	for _, t := range targets {
 		if _, exists := s.registry.Get(t.itemKey()); exists {
 			// 已存在且 itemKey 完全一致 = 所有属性一致，跳过
-			// PRD 6.2.2，指标语义：已存在于注册表，跳过本次分发
-			metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": "skipped"}).Inc()
-			// PRD 6.2.2，指标语义：跳过场景耗时记为 0（用于与 success/fail 直方图对齐）
-			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": "skipped"}).Observe(0)
+			// 注：skipped 场景不埋点，仅实际执行分发的配置才 Observe 耗时
 			continue
 		}
 
 		// 记录二级配置分发耗时（PRD 6.2.2 Histogram）
 		start := time.Now()
-		distributeResult := "fail"
-		if s.processTarget(t) {
-			success++
-			distributeResult = "success"
+		bizOK, resultLabel := s.processTarget(t)
+		if bizOK {
+			success++ // 配置落盘 + 监听注册成功（reloadScript 软失败也算业务成功）
 		} else {
 			failed++
 		}
 		duration := time.Since(start).Seconds()
 
-		// PRD 6.2.2，指标语义：二级配置分发处理计数 + 耗时分布
-		metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": distributeResult}).Inc()
-		metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": distributeResult}).Observe(duration)
+		// PRD 6.2.2，指标语义：二级配置分发耗时分布（计数已由 _count 替代）
+		// resultLabel 取值：success / fail_pull_config / fail_write / fail_script / fail_listen
+		metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"config_code": t.configCode, "result": resultLabel}).Observe(duration)
 	}
 
 	// enableClean 触发的配置清理（失败不影响后续，PRD 3.2.3 / 3.2.4）
@@ -559,26 +557,28 @@ func (s *ConfigService) searchGroupDataIds(group string) ([]string, error) {
 // 使用 perConfigLock 与 handleListenerCallback 互斥，防止极端场景下（SDK AddListener 后
 // 立即触发首次 OnChange）processTarget 的 writeConfig 与回调 writeConfig 竞争同一 finalPath
 //
-// 返回值语义：true 表示 GetConfig + writeConfig + runReloadScript + AddListener 全部成功，
-// 配置项已加入 registry 由 Nacos 监听持续推送变更；
-// false 表示任一步骤失败，配置项不加入 registry（per listenerMu 会同步清理），
-// 下一轮定时拉取自然走 !exists 分支重新执行 processTarget（完整重试）。
+// 返回值：(bizOK, resultLabel)
+//
+//	bizOK=true：配置落盘 + 监听注册成功（reloadScript 软失败也算 bizOK=true，计入 success）
+//	bizOK=false：GetConfig / writeConfig / AddListener 硬失败（计入 failed）
+//	resultLabel 取值：success / fail_pull_config / fail_write / fail_script / fail_listen
+//	优先级：硬失败 > 软失败（AddListener 失败覆盖 reloadScript 失败标签）
 //
 // #2 防止 listenerMu 内存泄漏 + 防止 manual Unlock 的 panic 风险：
 //
 //	defer mu.Unlock() 保证任何 panic 路径都能解锁；
 //	用 needCleanupListenerMu 标志在 registry 未 Add 时（含 writeConfig 失败 + AddListener 失败）清理 listenerMu 条目。
-func (s *ConfigService) processTarget(t *targetConfig) bool {
+func (s *ConfigService) processTarget(t *targetConfig) (bool, string) {
 	content, err := s.cc.GetConfig(t.dataId, t.group)
 	if err != nil {
 		logger.Error("首次拉取二级配置失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
-		return false
+		return false, "fail_pull_config"
 	}
 	if content == "" {
 		logger.Warn("拉取到的配置内容为空，跳过写入",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
-		return false
+		return false, "fail_pull_config"
 	}
 
 	// 与 handleListenerCallback 共享 per-itemKey 锁
@@ -602,12 +602,13 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 		needCleanupListenerMu = true
 		logger.Error("首次写入二级配置失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
-		return false
+		return false, "fail_write"
 	}
 
-	// 首次执行 reloadScript
+	// 首次执行 reloadScript：软失败，不中断流程，结果延后到 AddListener 之后判定
+	reloadOK := true
 	if t.reloadScript != "" {
-		s.runReloadScript(t)
+		reloadOK = s.runReloadScript(t)
 	}
 
 	// 注册 Nacos 监听：配置变更时 OnChange 回调触发
@@ -618,11 +619,12 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 	if err := s.cc.AddListener(t.dataId, t.group, onChange); err != nil {
 		// 监听注册失败 → 不加入 registry（否则后续轮次 DistributeAllConfigs 会误以为已注册）
 		// 下一轮定时拉取该条目自然不在 registry 中，会走 !exists 分支重新完整重试 processTarget
+		// 硬失败覆盖软失败：即使 reloadScript 也失败，此时优先报 fail_listen
 		needCleanupListenerMu = true
 		logger.Error("注册 Nacos 监听失败，等待下一轮定时拉取重新注册",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 			"storePath", t.storePath, "error", err)
-		return false
+		return false, "fail_listen"
 	}
 
 	// AddListener 成功 → 才加入 registry，由 Nacos 监听持续推送后续变更
@@ -650,7 +652,11 @@ func (s *ConfigService) processTarget(t *targetConfig) bool {
 	// 同一个 itemKey 不可能被两个 goroutine 同时走到这里。
 	// 即使极端情况发生，副作用（writeConfig + reloadScript）已落盘，也无需回滚。
 
-	return true
+	// 硬链路全通，最终标签取决于 reloadScript 软失败
+	if !reloadOK {
+		return true, "fail_script"
+	}
+	return true, "success"
 }
 
 // handleListenerCallback Nacos 配置变更回调处理器
@@ -664,14 +670,12 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	listenerStart := time.Now()
 	var listenerResult string
 	defer func() {
-		// PRD 6.2.2，指标语义：Nacos 监听触发的二级配置分发处理计数
-		metrics.ConfigItemDistributeTotal.With(prometheus.Labels{"result": listenerResult}).Inc()
-		// PRD 6.2.2，指标语义：Nacos 监听触发的分发流程耗时分布
+		// PRD 6.2.2，指标语义：Nacos 监听触发的分发流程耗时分布（计数已由 _count 替代）
+		// 注：skipped 场景不埋点（配置已不在注册表，不属于实际执行）
 		if listenerResult == "skipped" {
-			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": "skipped"}).Observe(0)
-		} else {
-			metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"result": listenerResult}).Observe(time.Since(listenerStart).Seconds())
+			return
 		}
+		metrics.ConfigItemDistributeDuration.With(prometheus.Labels{"config_code": t.configCode, "result": listenerResult}).Observe(time.Since(listenerStart).Seconds())
 	}()
 
 	defer func() {
@@ -707,8 +711,8 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 		// Nacos 通知内容为空 = 配置被删除
 		if filekit.PathExists(finalPath) {
 			if err := os.Remove(finalPath); err != nil {
-				// PRD 6.2.2：删除本地文件失败
-				listenerResult = "fail"
+				// PRD 6.2.2：删除本地文件失败（文件 I/O 统一归入 fail_write）
+				listenerResult = "fail_write"
 				logger.Error("监听回调：配置内容为空，删除本地文件失败",
 					"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
 					"storePath", t.storePath, "path", finalPath, "error", err)
@@ -728,17 +732,24 @@ func (s *ConfigService) handleListenerCallback(t *targetConfig, newContent strin
 	}
 	if err := s.writeConfig(t, newContent, finalPath); err != nil {
 		// PRD 6.2.2：writeConfig 失败
-		listenerResult = "fail"
+		listenerResult = "fail_write"
 		logger.Error("监听回调：配置处理失败",
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath, "error", err)
 		return
 	}
 	if t.reloadScript != "" {
-		s.runReloadScript(t)
+		if !s.runReloadScript(t) {
+			// reloadScript 软失败，不回滚文件写入，继续流程，埋点标注 fail_script
+			listenerResult = "fail_script"
+		}
 	}
-	listenerResult = "success"
-	logger.Info("监听回调：配置更新成功",
-		"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
+	// 兜底：只有硬链路全成功且 reloadScript 也成功（或未配置）才标记 success
+	if listenerResult == "" {
+		listenerResult = "success"
+	}
+	logger.Info("监听回调：配置更新完成",
+		"namespace", t.namespace, "group", t.group, "dataId", t.dataId,
+		"storePath", t.storePath, "result", listenerResult)
 }
 
 // perConfigLock 获取指定 itemKey 的串行化锁（不存在则懒创建）
@@ -802,7 +813,21 @@ func (s *ConfigService) writeConfig(t *targetConfig, content, finalPath string) 
 // runReloadScript 执行重载脚本（失败不回滚，仅捕获 stdout/stderr 写日志）
 // 工作目录为 Agent 二进制目录（PRD 3.2.3）
 // 使用独立 context（独立 timeout），不依赖 pullStopCtx（避免并发数据竞争）
-func (s *ConfigService) runReloadScript(t *targetConfig) {
+// 返回值：true=脚本正常执行且 exitCode=0；false=exec error / exitCode!=0 / panic
+//
+// panic recovery：防止脚本执行内部 panic 扩散导致外层定时拉取整轮跳过
+func (s *ConfigService) runReloadScript(t *targetConfig) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("重载脚本执行 panic 已捕获（不回滚）",
+				"script", truncateForLog(t.reloadScript),
+				"panic", fmt.Sprint(r),
+				"workDir", s.params.AgentExecDir,
+				"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
+			ok = false
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.params.ReloadScriptTimeout)*time.Second)
 	defer cancel()
 
@@ -814,7 +839,7 @@ func (s *ConfigService) runReloadScript(t *targetConfig) {
 			"error", err,
 			"workDir", s.params.AgentExecDir,
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
-		return
+		return false
 	}
 	if exitCode != 0 {
 		logger.Warn("重载脚本非零退出码（不回滚）",
@@ -823,12 +848,13 @@ func (s *ConfigService) runReloadScript(t *targetConfig) {
 			"stdout_preview", truncateForLog(stdout), "stderr_preview", truncateForLog(stderr),
 			"workDir", s.params.AgentExecDir,
 			"namespace", t.namespace, "group", t.group, "dataId", t.dataId, "storePath", t.storePath)
-		return
+		return false
 	}
 	logger.Info("重载脚本执行成功",
 		"script", truncateForLog(t.reloadScript),
 		"workDir", s.params.AgentExecDir,
 		"namespace", t.namespace, "group", t.group, "dataId", t.dataId)
+	return true
 }
 
 // removeStale 取消 Nacos 监听并移除注册表中不在本次目标列表内的失效项
@@ -947,7 +973,7 @@ func (s *ConfigService) cleanStorePath(storePath string, finalNames map[string]b
 	if isHighRiskDir(storePath) {
 		logger.Warn("storePath 命中高危目录黑名单，跳过清理", "storePath", storePath)
 		// PRD 6.2.3，指标语义：配置清理触发，命中高危目录黑名单跳过
-		metrics.ConfigCleanTriggerTotal.With(prometheus.Labels{"result": "skipped_high_risk"}).Inc()
+		metrics.ConfigCleanTriggerTotal.With(prometheus.Labels{"result": "skipped"}).Inc()
 		return
 	}
 	if !filekit.PathExists(storePath) {
@@ -1148,7 +1174,7 @@ func (s *ConfigService) doPullOnce() {
 	// 避免无效的 GetConfig/SearchConfig 调用及不必要的 nacos_connect_total 埋点
 	// 后台 reconnectLoop 仍在每 60s 重试创建 ConfigClient，成功后下次调度自然恢复
 	if !s.cc.IsConnected() {
-		logger.Debug("跳过定时拉取配置：Nacos ConfigClient 尚未创建，等待后台重连")
+		logger.Warn("跳过定时拉取配置：Nacos ConfigClient 尚未创建，等待后台重连")
 		return
 	}
 
