@@ -310,8 +310,8 @@ func InitServer(cfg *model.AgentConfig, bindAddr string) (*http.Server, func(), 
 		writeJSON(w, http.StatusOK, resp)
 	}))
 
-	// 全局鉴权中间件
-	handler := service.AuthMiddleware(cfg.Auth.Key, mux)
+	// 全局鉴权中间件（PRD 3.8）
+	handler := service.AuthMiddleware(cfg.Auth.Key, cfg.Auth.Value, mux)
 
 	// ========== 创建HTTP Server ==========
 	// WriteTimeout 需覆盖最长处理器耗时，避免长耗时响应被提前掐断：

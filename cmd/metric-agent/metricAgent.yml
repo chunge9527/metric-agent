@@ -110,8 +110,10 @@ victoriaMetrics:
 
 # HTTP 接口鉴权配置
 auth:
-  # 鉴权密钥，客户端需在请求头携带 Authentication 或 CIB-AUTHORIZATION，必填
-  key: "bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ="
+  # 鉴权请求头名称，必填
+  key: "Authorization"
+  # 鉴权密钥，必填
+  value: "bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ="
 
 # 文件上传配置
 upload:

@@ -9,7 +9,7 @@
 | 项目      | 说明                                                         |
 | ------- | ---------------------------------------------------------- |
 | 基础 URL  | `http://{host}:{port}`，默认端口 **9092**，默认绑定 **0.0.0.0:9092** |
-| 鉴权方式    | 请求头 `Authentication`，值为配置文件中的 `auth.key`，大小写敏感精确匹配         |
+| 鉴权方式    | 请求头名称由 `metricAgent.yml` 的 `auth.key` 配置，值为 `auth.value`，大小写敏感精确匹配         |
 | 鉴权白名单   | `/health` / `/api/v1/guardian` 跳过鉴权；`/api/v1/exec` 跳过鉴权（自带 AES 应用层加密保护）；`/metrics` **需鉴权** |
 | 请求体大小限制 | 所有接口 10MB（除 `/api/v1/upload` 另受文件大小限制）                     |
 | 默认超时    | 连接读写 30s，空闲 120s；命令执行最长 600s；请求透传最长 120s                   |
@@ -210,7 +210,7 @@ print(plaintext.decode())
 | ---------------- | ------------------------------------------- |
 | **Method**       | 所有 HTTP 方法（GET/POST/PUT/DELETE/...），透传到目标服务 |
 | **URL**          | `/forward` 或 `/forward/{path_suffix}`       |
-| **鉴权**           | ✅ 需要（`Authentication`）                      |
+| **鉴权**           | ✅ 需要（请求头名由 `auth.key` 配置，值为 `auth.value`）                      |
 | **Content-Type** | 与原始请求相同，由透传保留                               |
 
 #### 1.4.1 Query 参数
@@ -251,11 +251,11 @@ Query: target=http://backend:9090/base?x=1
 
 ```bash
 # 查询 VictoriaMetrics
-curl -H "Authentication: your-auth-key" \
+curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   'http://127.0.0.1:9092/forward/api/v1/query?target=http://10.0.0.5:8428&query=up'
 
 # POST 请求透传
-curl -X POST -H "Authentication: your-auth-key" \
+curl -X POST -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   'http://127.0.0.1:9092/forward?target=http://backend:9090/submit' \
   -d '{"key": "value"}'
 ```
@@ -269,7 +269,7 @@ curl -X POST -H "Authentication: your-auth-key" \
 | ---------------- | ------------------------------------------ |
 | **Method**       | `POST`                                     |
 | **URL**          | `/api/v1/upload`                           |
-| **鉴权**           | ✅ 需要（`Authentication`）                     |
+| **鉴权**           | ✅ 需要（请求头名由 `auth.key` 配置，值为 `auth.value`）                     |
 | **Content-Type** | `multipart/form-data`                      |
 | **单文件大小上限**      | 默认 **100MB**，可通过配置 `upload.maxFileSize` 修改 |
 
@@ -343,7 +343,7 @@ curl -X POST -H "Authentication: your-auth-key" \
 
 ```bash
 # 覆盖上传
-curl -X POST -H "Authentication: your-auth-key" \
+curl -X POST -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   -F "storePath=/opt/metric-agent/conf" \
   -F "fileName=my-config.yaml" \
   -F "overwrite=true" \
@@ -351,7 +351,7 @@ curl -X POST -H "Authentication: your-auth-key" \
   http://127.0.0.1:9092/api/v1/upload
 
 # 不覆盖（已存在时返回 409）
-curl -X POST -H "Authentication: your-auth-key" \
+curl -X POST -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   -F "storePath=/opt/metric-agent/conf" \
   -F "fileName=my-config.yaml" \
   -F "overwrite=false" \
@@ -359,7 +359,7 @@ curl -X POST -H "Authentication: your-auth-key" \
   http://127.0.0.1:9092/api/v1/upload
 
 # 上传脚本（不指定 fileName 时使用文件原始名称）
-curl -X POST -H "Authentication: your-auth-key" \
+curl -X POST -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   -F "storePath=/opt/metric-agent/bin" \
   -F "file=@./deploy-script.sh" \
   http://127.0.0.1:9092/api/v1/upload
@@ -493,7 +493,7 @@ curl http://127.0.0.1:9092/api/v1/guardian?action=resume
 | ------------ | ---------------------------------------------- |
 | **Method**   | `GET`                                          |
 | **URL**      | `/api/v1/config/listen`                        |
-| **鉴权**       | ✅ 需要（`Authentication`）                      |
+| **鉴权**       | ✅ 需要（请求头名由 `auth.key` 配置，值为 `auth.value`）                      |
 | **Query 参数** | `group` / `dataId` / `storePath`（均可选，精确过滤，AND 逻辑） |
 
 > 数据来源：ConfigService 内存中的 ListenRegistry 快照，不实时请求 Nacos。接口始终可用——即使 `feature.enableNacos=false`，ConfigService 也会正常创建，registry 为空 map，返回 `{"total":0,"items":[]}`。
@@ -551,22 +551,22 @@ curl http://127.0.0.1:9092/api/v1/guardian?action=resume
 
 | HTTP 状态 | 原因                |
 | ------- | ----------------- |
-| 401     | 鉴权失败（未携带或携带错误的 `Authentication` 请求头） |
+| 401     | 鉴权失败（未携带或携带错误的 `auth.key` 请求头） |
 | 405     | 使用了非 GET 方法       |
 
 #### 1.7.4 cURL 示例
 
 ```bash
 # 查询所有监听配置
-curl -H "Authentication: your-auth-key" \
+curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   http://127.0.0.1:9092/api/v1/config/listen
 
 # 按 group 过滤
-curl -H "Authentication: your-auth-key" \
+curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   'http://127.0.0.1:9092/api/v1/config/listen?group=VM_GROUP'
 
 # 按 group + storePath 组合过滤（AND 逻辑）
-curl -H "Authentication: your-auth-key" \
+curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" \
   'http://127.0.0.1:9092/api/v1/config/listen?group=VM_GROUP&storePath=/etc/vm/cluster/'
 ```
 
@@ -580,11 +580,11 @@ curl -H "Authentication: your-auth-key" \
 | **Method**       | `GET`                                                             |
 | **URL**          | `/metrics`                                                        |
 | **Content-Type** | `text/plain; version=0.0.4; charset=utf-8`（Prometheus 文本格式）          |
-| **鉴权**           | ✅ 需要（Prometheus scrape 需携带 `Authentication: <auth.key>` 请求头）                |
+| **鉴权**           | ✅ 需要（请求头名由 `auth.key` 配置，值为 `auth.value`；Prometheus scrape 需携带该请求头）                |
 | **启用条件**       | 仅 HTTP 服务模式启用；`--exec` 指令执行模式**不暴露**本接口，default registry 中无任何指标 |
 | **暴露方式**       | 复用 `promhttp.Handler()`，Prometheus Server 直接 scrape 即可                          |
 
-> **说明**：本接口按 Prometheus 官方 exposition format 输出文本格式指标，包含 `promhttp` 默认的 Go runtime 指标（`go_*`、`process_*`）以及 MetricAgent 业务自定义指标。`/metrics` **需鉴权**，Prometheus scrape 配置需携带 `Authorization: Bearer <auth.key>` 请求头（见 §1.8.1）。
+> **说明**：本接口按 Prometheus 官方 exposition format 输出文本格式指标，包含 `promhttp` 默认的 Go runtime 指标（`go_*`、`process_*`）以及 MetricAgent 业务自定义指标。`/metrics` **需鉴权**，Prometheus scrape 配置需携带 `auth.key` 配置的请求头，值为 `auth.value`（见 §1.8.1）。
 
 #### 1.8.1 cURL 示例
 
@@ -595,10 +595,10 @@ curl -H "Authentication: your-auth-key" \
 #     static_configs:
 #       - targets: ['127.0.0.1:9092']
 #     headers:
-#       Authentication: ['your-auth-key']
+#       Authorization: ['bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=']   # 与 metricAgent.yml 中 auth.key / auth.value 一致
 
 # 手动 cURL 查看当前指标（需携带鉴权头）
-curl -H "Authentication: your-auth-key" http://127.0.0.1:9092/metrics
+curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" http://127.0.0.1:9092/metrics
 ```
 
 #### 1.8.2 指标总览

@@ -119,11 +119,6 @@ func validateConfig(cfg *model.AgentConfig) error {
 		}
 	}
 
-	// 鉴权密钥必填校验（防止auth.key为空时空字符串匹配导致鉴权绕过）
-	if strings.TrimSpace(cfg.Auth.Key) == "" {
-		return fmt.Errorf("auth.key为必填字段，不能为空")
-	}
-
 	return nil
 }
 

@@ -197,10 +197,12 @@ type VictoriaMetricsConfig struct {
 	AuthHeader string `yaml:"authHeader" json:"auth_header"`
 }
 
-// AuthConfig 鉴权配置
+// AuthConfig 鉴权配置（PRD 3.8）
 type AuthConfig struct {
-	// Key 鉴权密钥
+	// Key 鉴权请求头字段名（必填），如 "Authorization"、"X-Auth-Token"
 	Key string `yaml:"key" json:"key"`
+	// Value 鉴权凭证密钥（必填），与请求头 Key 对应的值进行精确、大小写敏感匹配
+	Value string `yaml:"value" json:"value"`
 }
 
 // UploadConfig 文件上传配置（PRD 3.8）

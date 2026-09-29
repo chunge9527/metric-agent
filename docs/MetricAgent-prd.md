@@ -77,13 +77,13 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 * 使用<span style="color:rgb(51, 51, 51)">恺</span>*<span style="color:rgb(247, 49, 49)">撒密码解密，对26个英文字母进行向前一位取值，比如B转换为A，abcd转换为zabc，xYza转换为wXyz</span>*。
 
 * 凯撒向前偏移1位逻辑
-
+  
   * 大写字母范围A-Z，每个字母向前-1；大写A向前偏移1，回卷到Z
-
+  
   * 小写字母范围a-z，每个字母向前-1；小写a向前偏移1，回卷到z
-
+  
   * 大小写两套字母独立处理，不能跨大小写转换
-
+  
   * 非 A-Z 和 a-z 的所有字符都原样保留，不做偏移变换
 
 ## 三、详细功能需求
@@ -110,7 +110,7 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 
 * 端口占用、二进制缺少执行权限、配置文件无读取权限，进程退出并输出精准错误提示。
 
-#### **3.1.2、HTTP 服务模式启动**
+#### 3.1.2、HTTP 服务模式启动
 
 **需求描述：**  以 HTTP 服务模式启动时，支持通过参数指定基础配置文件路径。
 
@@ -155,19 +155,18 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 * 定时任务执行时间间隔配置在metricAgent.yml中，见属性config.pullInterval，单位分钟，定时任务增加**任务锁（互斥锁）**，任务执行期间拒绝下一轮调度并打印警告日志，任务执行完成打印耗时、监听配置个数、移除监听个数等日志。
 
 * 定时任务锁增加超时时间10分钟，超时自动解锁；
-
+  
   ```
   个性化配置清单dataId拼接规则：metricFileConfig_{agent.id}
   公共配置清单dataId拼接规则：metricFileConfig
   ```
 
-
 * **配置去重与优先级策略**：
-
+  
   * 如果个性化配置中有重复的configCode，按照先配置先生效的原则去重。
-
+  
   * 如果公共配置中有重复的configCode，按照先配置先生效的原则去重。
-
+  
   * 个性化配置中配置项优先级高于公共配置中的配置项，是否是同一个配置项使用configCode判断。
 
 * 个性化配置清单和公共配置清单文件都不注册监听，采用定时任务主动拉取，清单中配置的二级配置才注册监听；
@@ -175,23 +174,23 @@ MetricAgent 以单可执行文件形式部署，支持两种 **互斥** 的运�
 * 个性化配置清单和公共配置清单都是yaml格式文件，解析内容按照yaml格式解析，解析结果必须是非 nil 数组，否则视为本次配置清单拉取失败，打印告警日志，打印配置dataid，不改动本地监听注册表，本次任务执行结束，解析成功打印当前配置加载dataid；
 
 * 个性化配置清单和公共配置清单内容都是数组结构，支持同时管理多份监控组件配置文件，每条配置项包含5个核心字段；
-
+  
   * configCode：配置项编号，必填，仅允许字母、数字、下划线、横线
-
+  
   * dataId：目标配置文件名称，也是 Nacos 拉取的 dataId，非必填
-
+  
   * group：配置文件分组，必填
-
+  
   * suffix：文件后缀，非必填，默认""空字符串
-
+  
   * storePath：本地存储目录路径，必填
-
+  
   * enableClean：false，是否执行“配置对齐”功能，非必填，默认false
-
+  
   * reFileName：文件重命名，未配置则不重命名，非必填
-
+  
   * fileMode：本地落地配置文件权限，八进制，例：0644、0755；非必填，默认0755
-
+  
   * reloadScript：重载 shell 脚本，未配置则不执行，非必填，超时时间默认 60 秒，可在 metricAgent.yml 中通过 config.reloadScript.timeout 配置
 
 * 打印日志需要澄清当前加载的配置是个性化配置，还是公共配置；
@@ -224,67 +223,67 @@ Items map[string]*ListenRegistryItem // key: itemKey
 **业务规则：**
 
 * 循环遍历配置清单读取的数据列表，执行以下处理逻辑：
-
+  
   * 必填项校验不通过，跳过；
-
+  
   * storePath最后一个字符不为当前操作系统文件路径分隔符，自动补全；
-
+  
   * 如果dataId和group都非空且不存在于本地监听注册表，执行使用配置中的namespace、dataId、group配置拉取、配置处理逻辑、设置监听，监听注册成功存入本地监听注册表，监听失败打印警告日志，继续处理下一条数据。
-
+  
   * 如果dataId为空但group不为空，执行以下逻辑
-
+    
     * 根据namespace和group查询所有配置，使用分页接口循环查询出该group下所有配置列表。
-
+    
     * 如果配置项enableClean=true，执行 配置清理 逻辑，配置清理逻辑执行失败不影响后续逻辑。
-
+    
     * 遍历查询到的配置列表，如果当前配置不存在于本地监听注册表则拉取配置、执行配置处理逻辑、注册监听，监听注册成功存入本地监听注册表，监听失败打印警告日志，继续处理下一条数据。
-
+  
   * 配置监听注册注意去重，根据`itemKey`去重，使用本地监听注册表去重。
-
+  
   * 任意一条数据处理逻辑异常，不影响其他数据继续处理。
 
 * 移除监听：
-
+  
   * 如果本地监听注册表有不存在于本次拉取的二级配置列表中（已通过配置必填项校验），移除nacos 监听，从本地注册表移除；
-
+  
   * 执行完打印日志，当前监听个数，移除监听个数，本次配置拉取是个性化配置还是公共配置，dataid
 
 * 监听回调函数/配置处理逻辑 执行规则如下：
-
+  
   * 最终文件名拼接规则：
-
+    
     * 如果reFileName不为空，拼接规则为：reFileName
-
+    
     * 如果reFileName为空，拼接规则为：dataId+suffix，suffix已设置默认值
-
+  
   * **写入机制**：
-
+    
     * 如果storePath中某一级文件夹不存在，需要支持自动创建文件夹，并设置权限为755。
-
+    
     * 写入采用原子写：先写入临时文件，路径： `storePath+{最终文件名}.{uuid}.tmp`。
-
+    
     * 写入临时文件成功后，如果`storePath+{最终文件名}`已存在，则先备份；备份文件夹  `storePath+"bak"` ，备份文件名：`{最终文件名}`，多次更新直接覆盖旧备份；如果bak文件夹不存在，先创建文件夹并设置755权限。
-
+    
     * 备份成功后，临时文件原子重命名为`{最终文件名}`，设置文件权限为755。
-
+    
     * 如果reloadScript不为空，使用agent进程用户执行脚本，需设置执行超时时间，配置见metricAgent.yml中config.reloadScript.timeout，单位秒，不考虑脚本是否执行安全，reloadScript脚本执行失败不回滚，捕获脚本 stdout/stderr，写入日志。
-
+    
     * 脚本执行超时，kill 整个进程组，防止僵尸进程，脚本执行工作目录为 Agent 工作目录。
-
+  
   * **失败处理与回滚**：
-
+    
     * 监听回调函数执行异常，打印具体的异常日志，包括文件夹创建异常，本地写入权限不足，重命名失败等。
-
+    
     * 如果执行异常，需要进行回滚，回滚逻辑如下：
-
+      
       * 删除写入的tmp文件或者最终文件
-
+      
       * 如果有备份文件，恢复备份文件
 
 * 日志规范：
-
+  
   * 各个失败场景日志需要带上 namespace、group、dataId、storePath
-
+  
   * 本轮任务结束输出汇总日志：二级配置总条目、校验通过条目、处理成功条目、处理失败条目
 
 **异常处理：**
@@ -302,9 +301,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 **执行约束：**
 
 * 扫描范围：
-
+  
   * 主配置目录：storePath一级目录，**禁止递归遍历子目录**
-
+  
   * 复用全局storePath高危目录黑名单：如果storePath命中高危黑名单（/etc、/bin、/sbin、/usr/bin），直接跳过该目录，不做任何删除动作。
 
 **本地多余文件定义：**
@@ -314,7 +313,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 **业务规则：**
 
 * 执行配置清理的配置见基础配置文件metricAgent.yml
-
+  
   ```
   # 配置清单拉取、二级配置分发、配置清理配置
   config:
@@ -324,7 +323,6 @@ Items map[string]*ListenRegistryItem // key: itemKey
       cleanFixHour: [2,4,8]   # 定点执行清理时间配置，2代表2点执行，可配置多个时间点，需排重配置重复的时间点，只支持大于0小于23的正整数，不符合要求的直接过滤，必填，若无有效配置不执行配置清理逻辑   
       cleanSuffix: [".yml",".yaml"]      # 需要清理的文件后缀，排除空字符串，必填，不配置默认为.yml、.yaml
   ```
-
 
 * 如果config.cleanOrphanFile.enable=false，打印日志，执行结束。
 
@@ -367,7 +365,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * **接口格式**：`GET /api/v1/config/listen`
 
-* **鉴权规则**：纳入统一鉴权体系，通过 `Authentication` 或 `CIB-AUTHORIZATION` 请求头校验（PRD 3.8）；**不加入鉴权白名单**（白名单仅保留 `/health`、`/api/v1/exec`、`/api/v1/guardian`）。
+* **鉴权规则**：完全复用 3.8节鉴权机制；**不加入鉴权白名单**（白名单仅保留 `/health`、`/api/v1/exec`、`/api/v1/guardian`）。
 
 * **Nacos 未启用时的行为**：当 `feature.enableNacos=false` 时，ConfigService 仍会创建（registry 初始化为空 map），接口正常返回 `{"total": 0, "items": []}`，不返回 503。
 
@@ -376,13 +374,13 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * **排序规则**：返回结果按 `group` 升序、`dataId` 升序排列，便于人工查看同一分组下的多个配置项。
 
 * **可选过滤参数**：
-
-  | 参数    | 类型   | 说明                                          |
-  | ------- | ------ | --------------------------------------------- |
-  | group   | string | 按 group 精确过滤；不传则不过滤                |
-  | dataId  | string | 按 dataId 精确过滤；不传则不过滤               |
-  | storePath | string | 按 storePath 精确过滤；不传则不过滤          |
-
+  
+  | 参数        | 类型     | 说明                      |
+  | --------- | ------ | ----------------------- |
+  | group     | string | 按 group 精确过滤；不传则不过滤     |
+  | dataId    | string | 按 dataId 精确过滤；不传则不过滤    |
+  | storePath | string | 按 storePath 精确过滤；不传则不过滤 |
+  
   多个过滤参数同时传入时，取 **交集**（AND 逻辑）。过滤不命中时返回空数组而非报错。
 
 **响应结构：**
@@ -411,46 +409,45 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 **响应字段说明（items 单条）：**
 
-| 字段         | 类型   | 说明                                                                          |
-| ------------ | ------ | ----------------------------------------------------------------------------- |
+| 字段           | 类型     | 说明                                                                                                            |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------- |
 | itemKey      | string | 注册表唯一主键（MD5），由 namespace+group+dataId+suffix+storePath+fileMode+reloadScript+reFileName 拼接生成，与 PRD 3.2.3 定义一致 |
-| configCode   | string | 配置项编号（PRD 3.2.2），用于跨清单 configCode 去重和优先级合并                 |
-| namespace    | string | Nacos 命名空间                                                                |
-| group        | string | Nacos 配置分组                                                                |
-| dataId       | string | Nacos dataId                                                                  |
-| suffix       | string | 文件后缀（PRD 3.2.2 suffix 字段，已归一化处理）                                |
-| storePath    | string | 本地存储目录路径（已自动补全末尾路径分隔符）                                   |
-| finalName    | string | 计算后的最终文件名（reFileName 非空优先，否则 dataId+suffix）                  |
-| reFileName   | string | 文件重命名配置（PRD 3.2.2），未配置时为空字符串                                |
-| fileMode     | string | 文件权限（八进制字符串，如 "0755"）                                            |
-| reloadScript | string | 重载脚本内容（PRD 3.2.2），未配置时为空字符串                                  |
-| enableClean  | bool   | 是否执行配置对齐（PRD 3.2.2），仅在按分组拉取且开启清理时为 true              |
+| configCode   | string | 配置项编号（PRD 3.2.2），用于跨清单 configCode 去重和优先级合并                                                                    |
+| namespace    | string | Nacos 命名空间                                                                                                    |
+| group        | string | Nacos 配置分组                                                                                                    |
+| dataId       | string | Nacos dataId                                                                                                  |
+| suffix       | string | 文件后缀（PRD 3.2.2 suffix 字段，已归一化处理）                                                                              |
+| storePath    | string | 本地存储目录路径（已自动补全末尾路径分隔符）                                                                                        |
+| finalName    | string | 计算后的最终文件名（reFileName 非空优先，否则 dataId+suffix）                                                                   |
+| reFileName   | string | 文件重命名配置（PRD 3.2.2），未配置时为空字符串                                                                                  |
+| fileMode     | string | 文件权限（八进制字符串，如 "0755"）                                                                                         |
+| reloadScript | string | 重载脚本内容（PRD 3.2.2），未配置时为空字符串                                                                                   |
+| enableClean  | bool   | 是否执行配置对齐（PRD 3.2.2），仅在按分组拉取且开启清理时为 true                                                                       |
 
 **异常处理：**
 
-| 场景                    | HTTP 状态码 | 响应                              |
-| ----------------------- | ----------- | --------------------------------- |
-| 正常查询                | 200         | 完整 JSON 响应（含 total + items）|
-| 非 GET 方法调用         | 405         | `{"code": 405, "message": "仅支持 GET 方法"}` |
-| 鉴权失败                | 401         | 复用 AuthMiddleware 的 401 响应   |
-| 过滤参数不命中          | 200         | `{"total": 0, "items": []}`       |
+| 场景         | HTTP 状态码 | 响应                                       |
+| ---------- | -------- | ---------------------------------------- |
+| 正常查询       | 200      | 完整 JSON 响应（含 total + items）              |
+| 非 GET 方法调用 | 405      | `{"code": 405, "message": "仅支持 GET 方法"}` |
+| 鉴权失败       | 401      | 复用 AuthMiddleware 的 401 响应               |
+| 过滤参数不命中    | 200      | `{"total": 0, "items": []}`              |
 
 **实现锚点：**
 
-| 文件                                      | 改动                                                                                                                                                                              |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `internal/common/constant/constants.go`  | 新增路由常量 `RouteListen = "/api/v1/config/listen"`                                                                                                                                       |
-| `internal/model/api_model.go`            | 新增 `ListenItemResponse`（单条）和 `ListenListResponse`（整体）响应结构体                                                                                                          |
-| `internal/service/config_service.go`     | ConfigService 新增 `ListListeners(groupFilter, dataIdFilter, storePathFilter string) *ListenListResponse` 方法：内部调用 `registry.Items()` 获取快照 → 可选过滤 → 排序 → 转换为响应结构 |
-| `internal/bootstrap/server_init.go`       | 在 mux 路由注册区新增 `/api/v1/config/listen` Handler：校验 method → 调用 `configSvc.ListListeners()` → `writeJSON` 返回；`configSvc` 在所有模式下都存在（registry 为空时返回空数组）       |
-| `internal/service/auth_middleware.go`     | **无需改动**：`/api/v1/config/listen` 不走白名单，统一走 AuthMiddleware 鉴权                                                                                                              |
+| 文件                                      | 改动                                                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/common/constant/constants.go` | 新增路由常量 `RouteListen = "/api/v1/config/listen"`                                                                                                                |
+| `internal/model/api_model.go`           | 新增 `ListenItemResponse`（单条）和 `ListenListResponse`（整体）响应结构体                                                                                                    |
+| `internal/service/config_service.go`    | ConfigService 新增 `ListListeners(groupFilter, dataIdFilter, storePathFilter string) *ListenListResponse` 方法：内部调用 `registry.Items()` 获取快照 → 可选过滤 → 排序 → 转换为响应结构 |
+| `internal/bootstrap/server_init.go`     | 在 mux 路由注册区新增 `/api/v1/config/listen` Handler：校验 method → 调用 `configSvc.ListListeners()` → `writeJSON` 返回；`configSvc` 在所有模式下都存在（registry 为空时返回空数组）            |
+| `internal/service/auth_middleware.go`   | **无需改动**：`/api/v1/config/listen` 不走白名单，统一走 AuthMiddleware 鉴权                                                                                                  |
 
 **Prometheus 埋点策略**：本接口为轻量级只读查询（直接读取内存快照，无 I/O、无外部调用），不纳入 Prometheus 指标埋点（PRD 第六章覆盖的是配置分发、进程守护、定时任务等核心业务链路的操作型指标）。
 
+### 3.4、指令下发与执行
 
-### **3.4、指令下发与执行**
-
-#### **3.4.1、远程 Shell 命令执行**
+#### 3.4.1、远程 Shell 命令执行
 
 **需求描述**：接收外部 HTTP 请求传递的 Shell 脚本，在本地执行并返回执行结果，全程加密传输，执行用户为 Agent 运行用户。
 
@@ -472,7 +469,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * 脚本执行权限不足、进程异常终止时，返回对应错误原因与退出码。
 
-#### **3.4.2、指令模式执行**
+#### 3.4.2、指令模式执行
 
 **需求描述**：Agent 支持以指令模式单次运行，执行预定义功能后直接退出，脚本执行用户为 Agent 运行用户
 
@@ -488,9 +485,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 **异常处理**：指令不支持、参数缺失或错误时，输出用法说明并以错误码退出
 
-### **3.5、进程守护**
+### 3.5、进程守护
 
-#### **3.5.1、守护配置读取**
+#### 3.5.1、守护配置读取
 
 **需求描述**：定时读取本地守护配置文件，按配置对监控组件进行健康检查与自愈
 
@@ -501,20 +498,20 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * 读取周期为每 1 分钟（周期由metricAgent.yml中配置决定，见crontab.interval，未配置，默认为1分钟）执行一次；新配置在下一轮巡检周期生效，**已经正在运行的健康检查 / 拉起任务继续执行完毕，不被中断**。
 
 * 配置文件为数组结构，每个组件包含字段：
-
+  
   * `componentName`：组件类型，比如 vmselect，必填
-
+  
   * `ips`：组件部署的 ip，数组，必填；仅做精准 IP 匹配，不支持通配符；宿主机任意 IP 命中数组任意一项即执行守护逻辑。
-
+  
   * `healthCheckScript`‑ 健康检查脚本，必填
-
+  
   * `startScript`：启动脚本，非必填
 
 * 调度防重叠：若上一轮守护检查尚未完成，新一轮调度不启动，直接跳过，并记录 WARN 日志。
 
 **异常处理**：配置文件读取失败、格式错误时，记录日志，沿用上次有效配置，不中断守护流程
 
-#### **3.5.2、健康检查与自愈**
+#### 3.5.2、健康检查与自愈
 
 **需求描述**：按配置执行健康检查，组件异常时自动执行拉起操作，具备降级与熔断能力
 
@@ -529,9 +526,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * 自愈逻辑：判定组件不存活时，立即执行对应 startScript 拉起组件，如果未配置`startScript则不执行，仅打印warn日志`。
 
 * **启动脚本执行**：
-
+  
   * startScript 超时时间默认 120 秒，可在基础配置 crontab.startScript.timeout 配置。
-
+  
   * startScript 执行成功（脚本退出码为 0），立即再次执行健康检查，如果检查不通过，打印错误日志。
 
 * **超时约束**：单组件健康检查脚本超时时间为 60 秒，超时直接判定为检查失败（仅记录日志），超时时间可在 metricAgent.yml 中 crontab.healthCheck.timeout 字段独立配置。超时后强制 kill 子进程，避免僵尸进程。
@@ -540,14 +537,14 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 **异常处理**：健康检查脚本执行异常、启动脚本执行失败，均记录详细错误日志。
 
-#### **3.5.3、守护巡检暂停与恢复**
+#### 3.5.3、守护巡检暂停与恢复
 
 **需求描述**：运维可通过 HTTP 接口对进程守护巡检进行临时暂停与恢复操作。暂停期间，守护巡检协程保持存活但跳过 inspect 执行，已注册的巡检配置与协程状态全部保留；恢复后立即按巡检周期恢复正常执行。典型场景：组件人工维护期间临时冻结巡检，避免健康检查误报或干扰人工操作。
 
 **业务规则**：
 
 * **控制接口**：通过 `GET /api/v1/guardian?action=<操作>` 调用，支持三类操作：
-
+  
   | action 值 | 说明                            |
   | -------- | ----------------------------- |
   | `status` | 查询当前守护巡检状态（默认值，未传 action 时等价） |
@@ -561,7 +558,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * **幂等性**：重复 `pause` 已暂停的服务，或重复 `resume` 运行中的服务，均返回成功响应，仅日志提示"已处于 XX 状态，跳过"，不报错。
 
 * **状态查询**：`status` 返回完整快照，包含：
-
+  
   ```json
   {
     "status": {
@@ -574,18 +571,17 @@ Items map[string]*ListenRegistryItem // key: itemKey
   }
   ```
 
+* `running`：守护服务是否已启动（Start 后 true，Stop 后 false）
 
-  * `running`：守护服务是否已启动（Start 后 true，Stop 后 false）
+* `paused`：当前是否处于暂停中（Pause 后 true，Resume 或 Start/Stop 后 false）
 
-  * `paused`：当前是否处于暂停中（Pause 后 true，Resume 或 Start/Stop 后 false）
+* `interval_minutes`：巡检周期（分钟）
 
-  * `interval_minutes`：巡检周期（分钟）
+* `last_action`：最近一次控制操作类型：`start` / `pause` / `resume` / `stop`
 
-  * `last_action`：最近一次控制操作类型：`start` / `pause` / `resume` / `stop`
+* `last_action_at`：最近一次控制操作的 Unix 时间戳（秒）
 
-  * `last_action_at`：最近一次控制操作的 Unix 时间戳（秒）
-
-* **鉴权**：守护控制接口纳入统一鉴权体系，需在请求头传入 `Authentication` 或 `CIB-AUTHORIZATION`，与 `metricAgent.yml` 中 `auth.key` 精确匹配。未鉴权返回 401。
+* **鉴权规则**：加入鉴权白名单不鉴权（白名单仅保留 `/health`、`/api/v1/exec`、`/api/v1/guardian`）。
 
 * **feature 开关兼容**：当 `feature.enableGuardian=false`（进程守护未启用）时，HTTP Handler 返回 503 Service Unavailable，提示"进程守护服务未启用"。
 
@@ -635,18 +631,18 @@ Items map[string]*ListenRegistryItem // key: itemKey
 | `/api/v1/guardian?action=resume` | GET | auth.key | `{"success": true, "status": GuardianStatus}` |
 | `/api/v1/guardian`               | GET | auth.key | 默认等同于 `action=status`                         |
 
-### **3.6、请求透传**
+### 3.6、请求透传
 
 **需求描述**：提供 HTTP 请求透传能力，将请求转发至指定目标服务并返回响应，支持全类型 HTTP 请求。
 
 **业务规则：**
 
 * **接口格式**：[http\://Agent地址/forward?target=](http://Agent地址/forward?target=)<目标服务基础URL>，target 参数需经 URL 编码，Agent 侧自动解码。
-
+  
   * target 为**基础 URL**（如 [http\://backend:9090](http://backend:9090)），实际转发目标为 undefined<原始请求路径>?<原始查询参数>。
-
+  
   * 例如：Agent 收到 /forward?target=[http\://backend:9090/api/v1/query?x=1](http://backend:9090/api/v1/query?x=1)，实际转发到 [http\://backend:9090/api/v1/query?x=1](http://backend:9090/api/v1/query?x=1)。
-
+  
   * 若 target 已包含查询参数，则与原始请求的查询参数合并（目标参数优先）。
 
 * **请求保留**：透传时完整保留原请求的请求方法、请求头、请求体、cookie（除规则明确剔除的头）。
@@ -656,9 +652,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * **超时**：透传默认超时时间 30 秒，可在基础配置 forward.timeout 中调整，最大 120 秒。
 
 * **地址合法性校验规则**：
-
+  
   * 仅允许 http/https 协议。
-
+  
   * 禁止自动跟随重定向；若目标返回 3xx 状态，Agent 直接返回该响应，不自动跳转。
 
 **异常处理**
@@ -669,7 +665,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * 目标地址解析失败或包含多个 IP时，返回 403
 
-### **3.7、定时任务**
+### 3.7、定时任务
 
 **需求描述**：根据配置文件 ./scheduledConfig.yml 定时查询 VictoriaMetrics 指标，并按规则写入指定文件
 
@@ -680,7 +676,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 * VictoriaMetrics 请求鉴权配置：在基础配置中通过 victoriametrics.authHeader 字段设置请求头 Authorization 的值（例如 Basic dXNlc192Tp7U01TNH02b1RkV1glc1U5dysrTXg5WjZuV3dwSU16Y1cr043a2pHTjJna2d6ZGpzPQ==）。该字段支持从环境变量引用（如 \${VM_AUTH_HEADER}），避免明文写入配置文件。
 
 * scheduledConfig.yml 为数组结构，支持配置多个任务，每个任务支持配置多个promql，包含以下字段：
-
+  
   ```
   - name: 任务名称                      # 必填，唯一
     cron: */5 * * * *                 # 必填，标准 cron 表达式
@@ -692,15 +688,11 @@ Items map[string]*ListenRegistryItem // key: itemKey
           promql: sum(node_memory_MemTotal_bytes - node_memory_MemFree_bytes)
         - queryKey: disk
           promql: sum(node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})
-    
+  
     output:
       path: /cib/ctmp/services/vm_cluster/metricdata.txt   # 必填，输出文件路径
       maxFile: 100   # 非必填，单位MB
-
-
   ```
-
-
 - 多个任务按配置顺序串行执行，单个任务失败不影响其他任务。
 
 - 文件写入：支持配置本地输出路径，默认追加写入模式，支持配置覆盖模式；配置单文件最大上限，防止磁盘占满。
@@ -719,54 +711,56 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 ### 3.8、鉴权机制
 
-**需求描述**：所有 HTTP 接口均需鉴权，保障访问安全
+**需求描述**：除开鉴权白名单的其他所有 HTTP 接口均需鉴权，保障访问安全
 
 **业务规则：**
 
-* 鉴权凭证通过请求头传递，支持两个字段：Authentication、CIB-AUTHORIZATION
+* 鉴权凭证通过请求头传递，字段配置：metricAgent.yml 中配置auth.key
 
-* 凭证为字符串格式，与 metricAgent.yml 中配置的密钥进行精确、大小写敏感匹配；两个请求头任意一个匹配通过，即鉴权成功
+* 凭证为字符串格式，与 metricAgent.yml 中配置的密钥 auth.value 进行精确、大小写敏感匹配
 
-* 所有 HTTP 接口（含透传接口）均强制开启鉴权，无豁免接口
+* 如果未配置 auth.key 或 auth.value，去除前后空格后为空字符串也属于未配置，直接返回 HTTP 401 Unauthorized
 
 ### 3.9、 文件上传功能
 
-#### 需求描述：
+#### 需求描述
 
 提供 HTTP 方式的文件上传能力，支持运维管理端向节点侧远程分发文件（如配置片段、运维脚本、工具二进制等），可通过请求参数指定文件存储路径与目标文件名，作为 Nacos 配置分发机制的补充，满足临时、小批量文件的线下发需求。文件上传全链路纳入统一鉴权体系，保障操作安全可控。
 
 #### 业务规则
 
 1. **鉴权规则**
+   
+   * 文件上传接口强制启用鉴权，完全复用 3.8节鉴权机制。
 
-   * 文件上传接口强制启用鉴权，完全复用 3.7 节鉴权机制，通过`Authentication`或`CIB-AUTHORIZATION`请求头校验，无豁免接口。
-
-   * 鉴权逻辑与其他 HTTP 接口完全一致，不单独设置鉴权规则。
 2. **请求参数规则**
-
+   
    * `storePath`（必填）：文件在节点本地的存储目录路径，支持绝对路径与相对路径；相对路径统一以 Agent 二进制可执行文件所在目录为基准，与配置文件路径规则保持一致。
-
+   
    * `fileName`（非必填）：上传后重命名的目标文件名；未配置时，默认使用上传文件的原始文件名。
-
+   
    * `overwrite`（非必填）：是否覆盖已存在的同名文件，默认值为`true`；设为`false`时，目标路径已存在同名文件则直接拒绝，不执行覆盖。
+
 3. **文件写入规则**
-
+   
    * 原子写入机制：先写入目标目录下`.tmp_`前缀的临时文件，写入完成后通过系统原子重命名替换为最终文件名，避免写入过程中程序异常导致文件损坏，与二级配置分发的写入规则一致。
-
+   
    * 备份机制：目标路径已存在同名文件且允许覆盖时，先将原文件备份为`{原文件名}_agent_bak`，与原文件同目录；多次上传直接覆盖旧备份，仅保留最近 1 个备份版本。
-
+   
    * 目录自动创建：`storePath`指定的目录不存在时，自动递归创建目录，目录权限默认 0755。
-
+   
    * 权限控制：文件写入权限与 Agent 运行用户权限一致，不主动提权；文件权限默认 0755。
+
 4. **大小与资源约束**
-
+   
    * 默认单文件最大上传大小为 100MB，可在基础配置`metricAgent.yml`中通过`upload.maxFileSize`字段自定义调整。
-
+   
    * 超过大小限制的请求直接拒绝，不写入磁盘，避免占满节点磁盘。
+
 5. **路径安全校验**
-
+   
    * 禁止路径穿越：校验`storePath`与最终文件全路径，禁止包含`../`相对路径穿越，禁止指向系统敏感目录（如`/etc`、`/root`等，可在基础配置中配置黑名单）。
-
+   
    * 路径非法时直接拒绝请求，不执行写入操作。
 
 #### 异常处理
@@ -785,9 +779,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * 文件已存在且禁止覆盖：返回 409 Conflict，提示目标文件已存在。
 
-## **四、非功能需求**
+## 四、非功能需求
 
-### **4.1、性能要求**
+### 4.1、性能要求
 
 * 加密与解密过程低耗时，不对命令执行效率产生明显影响
 
@@ -797,7 +791,7 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * 配置同步（从 Nacos 拉取到写入本地）单条平均耗时不超过 2 秒
 
-### **4.2、可靠性要求**
+### 4.2、可靠性要求
 
 * 单个功能模块异常不得导致 Agent 主进程崩溃
 
@@ -807,15 +801,13 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 * Nacos 断连自动重连，降级模式保证基础可用
 
-### **4.3、兼容性要求**
+### 4.3、兼容性要求
 
 * 支持主流 Linux 操作系统部署运行（CentOS 7+、Ubuntu 18.04+、Debian 10+），支持arm和amd架构
 
 * 单可执行文件无外部依赖，可直接拷贝部署
 
-***
-
-## **五、日志与可观测性**
+## 五、日志与可观测性
 
 ### 1. 日志格式规范
 
@@ -860,10 +852,9 @@ Items map[string]*ListenRegistryItem // key: itemKey
 ### 5. 日志轮转策略（双触发：文件大小达到阈值 OR 每日 0 点，任一条件满足即触发轮转）
 
 * 触发条件（满足任意一条即执行日志切割轮转）
+1. 当前日志文件大小达到 `maxFileSize`，单位 MB，默认 100MB，取自 metricAgent.yml `log.maxFileSize`
 
-  1. 当前日志文件大小达到 `maxFileSize`，单位 MB，默认 100MB，取自 metricAgent.yml `log.maxFileSize`
-  2. 到达每日 0 点，自动触发一次轮转（跨天切割）
-
+2. 到达每日 0 点，自动触发一次轮转（跨天切割）
 * 轮转文件命名模板：`{前缀}-yyyy-MM-dd-{文件序号}.log`
 
 * 示例文件名：`metricAgent-2026-09-07-0.log`
@@ -884,15 +875,19 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 ```
 log:
-  # 日志级别：debug / info / warn / error，默认 info
+
+# 日志级别：debug / info / warn / error，默认 info
+
   level: info
-  # 单个日志文件最大大小，单位 MB，默认 100
+
+# 单个日志文件最大大小，单位 MB，默认 100
+
   maxFileSize: 100
-  # 日志最大保留天数，默认30天
+
+# 日志最大保留天数，默认30天
+
   maxRetainDays: 30
-
 ```
-
 
 ### 8. 代码要求
 
@@ -902,9 +897,10 @@ log:
 4. 代码增加详细注释，附带关键调用示例
 5. 增加基础单元测试：级别过滤、轮转文件命名、目录自动创建、双输出、跨天轮转、过期日志清理验证
 
-
 ## 六、Prometheus指标埋点规范
+
 > AI开发约束，必须严格遵守：
+> 
 > 1. 本章节为埋点唯一真值来源，**禁止自行新增、删减指标、标签、枚举值**；所有埋点必须严格按照表格实现。
 > 2. **标签必要性判定原则**：
 >    - 保留：能区分独立业务分支、对故障定位和告警有明确价值的维度；
@@ -918,52 +914,47 @@ log:
 > 9. 所有埋点代码必须增加注释，标明对应PRD章节与指标语义。
 
 ### 6.1 组件元数据埋点
-| 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| --- | --- | --- | --- | --- | --- | --- |
+
+| 指标名                      | 类型    | 业务标签集合                               | 指标语义                             | 标签枚举值                                                           | 关联PRD章节          | 标签必要性说明                                                     |
+| ------------------------ | ----- | ------------------------------------ | -------------------------------- | --------------------------------------------------------------- | ---------------- | ----------------------------------------------------------- |
 | `metricagent_build_info` | Gauge | `agent_id,agent_group,agent_version` | Agent程序构建版本信息，HTTP服务启动时设置，指标值恒为1 | agent_id: 节点ID<br>agent_group: 节点分组<br>agent_version: 业务版本号<br> | 3.1.2 HTTP服务模式启动 | 用于多实例版本识别、故障溯源；指标固定值1，通过标签携带全部构建元数据；仅HTTP服务模式初始化，指令模式不生成该指标 |
 
-
-
 ### 6.2 配置分发模块埋点（关联原PRD：3.2 配置加载全章节）
+
 > 业务覆盖：3.2.1 Nacos对接、3.2.2 配置清单拉取、3.2.3 二级配置分发、3.2.4 配置清理、文件落盘备份回滚、重载脚本执行
 
 #### 6.2.1 Nacos连接埋点
-| 指标名 | 类型 | 业务标签集合 | 指标语义 | 关联PRD章节 | 标签必要性说明 |
-| --- | --- | --- | --- | --- | --- |
-| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数，覆盖三个场景：①启动时`connect()`创建ConfigClient（初始连接+后台定时重连）；②运行期`GetConfig/SearchConfig`因网络层错误导致SDK RpcClient自动重连期间的请求失败；③`ConfigClient == nil`（启动后从未连接成功） | result: [success, fail] | 3.2.1 Nacos对接 | 保留`result`：区分成功、失败两分支；**与`config_list_pull_total.fail_pull`协同去重**——Nacos连接级失败统一由本指标`fail`计数，`config_list_pull_total`检测到`ErrCodeNacosConnect`时跳过`fail_pull`，避免双重计数 |
+
+| 指标名                               | 类型      | 业务标签集合   | 指标语义                                                                                                                                                        | 关联PRD章节                 | 标签必要性说明       |
+| --------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------- |
+| `metricagent_nacos_connect_total` | Counter | `result` | Nacos连接总次数，覆盖三个场景：①启动时`connect()`创建ConfigClient（初始连接+后台定时重连）；②运行期`GetConfig/SearchConfig`因网络层错误导致SDK RpcClient自动重连期间的请求失败；③`ConfigClient == nil`（启动后从未连接成功） | result: [success, fail] | 3.2.1 Nacos对接 |
 
 > **指标语义边界**：`fail`计数包含三类根因——①ParseNacosAddress/connect阶段TCP探测失败（初始连接层）；②GetConfig/SearchConfig返回`net.OpError`（dial tcp refused / i/o timeout / reset）或`context.DeadlineExceeded`（SDK RpcClient层）；③ConfigClient==nil（启动始终未连上）。**SDK业务错误**（鉴权失败、dataId不存在、服务端返回非连接类错误码）不计入本指标，走`config_list_pull_total.fail_pull`。
 
-
-
 #### 6.2.2 配置清单拉取指标
+
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | `metricagent_config_list_pull_total` | Counter | `config_type,result` | 配置清单拉取总次数，覆盖网络拉取、YAML解析、空结果全分支 | config_type: [personal, public]<br>result: [success, fail_pull, fail_parse, config_empty] | 3.2.2 配置清单拉取 | 保留`config_type`：个性化/公共为两次独立拉取动作，可分别统计成功率；<br>保留`result`：区分业务错误、解析异常、空结果三类失败场景，便于故障定位 |
 
 > **与`nacos_connect_total`协同去重**：当`GetConfig`返回`ErrCodeNacosConnect`（Nacos连接级错误，含ConfigClient==nil / net.OpError / context.DeadlineExceeded）时，`tryParseList`**跳过**`fail_pull`计数——此类场景统一由`metricagent_nacos_connect_total{result="fail"}`覆盖。`fail_pull`仅在**SDK业务错误**（鉴权失败、dataId不存在等非连接类错误）时计数。
 
 #### 6.2.3 二级配置分发与监听指标
-| 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| --- | --- | --- | --- | --- | --- | --- |
+
+| 指标名                                                   | 类型        | 业务标签集合               | 指标语义                                    | 标签枚举值                                                                                                                                                                                                                                                                                                                             | 关联PRD章节      | 标签必要性说明                                                                                                                                    |
+| ----------------------------------------------------- | --------- | -------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `metricagent_config_item_distribute_duration_seconds` | Histogram | `config_code,result` | 单条二级配置完整分发流程总耗时（包含拉取配置、写文件、重载脚本、注册监听）分布 | config_code: 配置项编号（PRD 3.2.2 必填）<br>result: [success, fail_pull_config, fail_write, fail_listen, fail_script]（skipped 场景不埋点）<br>• success: 全链路成功<br>• fail_pull_config: GetConfig 失败或空内容（硬失败）<br>• fail_write: 写文件/删文件失败（硬失败）<br>• fail_listen: AddListener 注册监听失败（硬失败）<br>• fail_script: reloadScript 软失败（配置已落盘+监听已注册，仅脚本执行通知失败） | 3.2.3 二级配置分发 | 保留`config_code`：按配置项编号维度统计耗时，可定位哪条配置慢/失败多；<br>保留`result`：细化为 4 个失败子类型，可精准定位瓶颈在拉取/写文件/监听注册/脚本执行哪个链路阶段；<br>统一使用全局标准bucket，用于监控分发链路性能、定位慢配置问题 |
 
-> **2026-09-28 细化** `result` 标签：原 `success/fail` 两值细化为 `success/fail_pull_config/fail_write/fail_listen/fail_script` 五值。硬失败（`fail_pull_config`/`fail_write`/`fail_listen`）计入 failed 计数，需下一轮定时拉取重试；软失败（`fail_script`）计入 success 计数——配置已正确落盘且监听已注册，仅重载脚本执行通知失败，不影响业务流程。告警规则应分级处理：硬失败设高优告警，软失败设低优或仅记录。
-
-> **2026-09-28 移除** `metricagent_config_item_distribute_total` Counter：每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数需求改用 `metricagent_config_item_distribute_duration_seconds_count`。
-
-
-
 #### 6.2.4 配置清理指标
-| 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
-| --- | --- | --- | --- | --- | --- | --- |
+
+| 指标名                                      | 类型      | 业务标签集合   | 指标语义     | 标签枚举值                      | 关联PRD章节        | 标签必要性说明                      |
+| ---------------------------------------- | ------- | -------- | -------- | -------------------------- | -------------- | ---------------------------- |
 | `metricagent_config_clean_trigger_total` | Counter | `result` | 配置清理触发次数 | result: [success, skipped] | 3.2.4 配置清理执行约束 | 保留`result`：覆盖正常执行、命中高危目录四类分支 |
 
-
 ### 6.3 进程守护模块埋点（关联原PRD：3.5 进程守护全章节）
+
 > 业务覆盖：3.5.1 守护配置读取、3.5.2 健康检查与自愈、3.5.3 守护巡检暂停与恢复
 
 #### 6.3.1 健康检查与自愈指标
+
 | 指标名 | 类型 | 业务标签集合 | 指标语义 | 标签枚举值 | 关联PRD章节 | 标签必要性说明 |
 | `metricagent_guardian_self_heal_duration_seconds` | Histogram | `component_name,result` | 组件自愈全流程（启动脚本执行+拉起后健康检查）总耗时分布 | component_name: [组件名]<br>result: [success, fail, interrupted] | 3.5.2 自愈逻辑 | 保留`component_name`：按组件维度统计耗时，便于定位性能瓶颈；<br>保留`result`：区分不同执行结果下的耗时分布，辅助故障与性能联合排查；统一使用全局标准bucket |
-
-> **2026-09-28 移除** `metricagent_guardian_self_heal_total` Counter：每 1 次 Inc() 与 Histogram.Observe() 严格 1:1 配对，冗余。计数需求改用 `metricagent_guardian_self_heal_duration_seconds_count`。
