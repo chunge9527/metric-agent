@@ -711,15 +711,16 @@ Items map[string]*ListenRegistryItem // key: itemKey
 
 ### 3.8、鉴权机制
 
-**需求描述**：除开鉴权白名单的其他所有 HTTP 接口均需鉴权，保障访问安全
+**需求描述**：除开鉴权白名单的其他所有 HTTP 接口均需鉴权，保障访问安全，技术实现基于 HTTP Basic 认证。
 
 **业务规则：**
 
-* 鉴权凭证通过请求头传递，字段配置：metricAgent.yml 中配置auth.key
-
-* 凭证为字符串格式，与 metricAgent.yml 中配置的密钥 auth.value 进行精确、大小写敏感匹配
-
-* 如果未配置 auth.key 或 auth.value，去除前后空格后为空字符串也属于未配置，直接返回 HTTP 401 Unauthorized
+* 采用HTTP Basic 认证
+* 服务端未读取到 `Authorization` 认证头，值为空字符串也表示未携带认证头 ，返回 401 Unauthorized，响应头携带WWW-Authenticate: Basic realm="Please input username and password"
+* 服务端读取到 `Authorization` 认证头，截取 `Basic ` 后面的串，Base64 解码得到账号密码，校验是否匹配配置文件中的账号密码，见 auth.username 和 auth.password。
+* 若匹配，继续处理请求；若不匹配，服务端返回 401 Unauthorized，响应头携带WWW-Authenticate: Basic realm="Please input username and password"
+* 账号和密码进行精确、大小写敏感匹配
+* 如果未配置 auth.username 或 auth.password，去除前后空格后为空字符串也属于未配置，直接返回 HTTP 401 Unauthorized
 
 ### 3.9、 文件上传功能
 

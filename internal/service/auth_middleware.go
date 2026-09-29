@@ -11,24 +11,24 @@ import (
 	"metric-agent/internal/model"
 )
 
-// AuthMiddleware HTTP鉴权中间件（PRD 3.8）
-// 从请求头 headerName 读取值，与 expectedValue 进行大小写敏感精确匹配。
-// headerName 和 expectedValue 均由 metricAgent.yml 中 auth.key / auth.value 配置。
+// authRealm HTTP Basic 认证 realm 值，PRD 3.8 规定固定文案
+const authRealm = `Basic realm="Please input username and password"`
+
+// AuthMiddleware HTTP Basic 认证中间件（PRD 3.8）
 //
-// 启动时不校验 auth 配置完整性，运行时中间件自行兜底：
-//   - 配置为空（auth.key 或 auth.value TrimSpace 后为空）→ 401
-//   - 请求头值为空（header 不存在或 TrimSpace 后为空）→ 401，不做 == 匹配
-//   - 仅 actualValue == expectedValue 且两者均非空时才放行
+// 认证流程：
+//  1. 路径白名单直接放行（/health /api/v1/exec /api/v1/guardian）。
+//  2. username/password 配置 trim 后为空 → 401（未配置鉴权，兜底拒绝所有请求）。
+//  3. 使用 r.BasicAuth() 解析 Authorization 头（Go 标准库自动处理 Basic 前缀、base64 解码、user:pass 拆分）。
+//     - ok=false 表示请求未携带合法的 Basic 头（无 Authorization、无 Basic 前缀、base64 非法、无冒号分隔）→ 401。
+//     - ok=true 但 user 或 pass trim 后为空（如 base64(":password") 或 base64("user:")）→ 401。
+//  4. user == username && pass == password（精确、大小写敏感匹配）→ 放行；否则 401。
 //
-// 路径白名单：
-//   - /health    健康检查，探针需免鉴权访问
-//   - /metrics   Prometheus metrics 暴露，需鉴权（scrape 端携带 auth.key 请求头）
-//   - /api/v1/exec 指令执行，ExecHandler 自带 AES 应用层加密保护，
-//     知道密钥才能构造有效请求，安全边界在应用层而非 HTTP 头；
-//     同时 runExecMode 指令执行模式不加载配置文件，无法获取 auth.key，也应跳过。
-//   - /api/v1/guardian 进程守护控制，需免鉴权访问
-//     支持 GET ?action=pause / resume / status 三种操作
-func AuthMiddleware(headerName, expectedValue string, next http.Handler) http.Handler {
+// 所有 401 响应均携带 WWW-Authenticate: Basic realm="Please input username and password"（PRD 3.8 强制要求）。
+//
+// 作者：王春
+// 日期：2026-09-29
+func AuthMiddleware(username, password string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 路径白名单：健康检查、指令执行、守护控制跳过鉴权；/metrics 需鉴权
 		if r.URL.Path == myconstant.RouteHealth || r.URL.Path == myconstant.RouteExec || r.URL.Path == myconstant.RouteGuardianControl {
@@ -36,9 +36,9 @@ func AuthMiddleware(headerName, expectedValue string, next http.Handler) http.Ha
 			return
 		}
 
-		// 配置为空时拒绝所有请求（启动时不校验，运行时兜底；防止 "" == "" 绕过）
-		if strings.TrimSpace(headerName) == "" || strings.TrimSpace(expectedValue) == "" {
-			logger.Error("鉴权配置未完成（auth.key 或 auth.value 为空），拒绝请求",
+		// 配置为空时拒绝所有请求（PRD 3.8：未配置 auth.username 或 auth.password → 直接 401）
+		if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
+			logger.Error("鉴权配置未完成（auth.username 或 auth.password 为空），拒绝请求",
 				"remote_addr", r.RemoteAddr,
 				"path", r.URL.Path,
 			)
@@ -46,40 +46,51 @@ func AuthMiddleware(headerName, expectedValue string, next http.Handler) http.Ha
 			return
 		}
 
-		// 从配置的请求头读取凭证
-		actualValue := r.Header.Get(headerName)
-
-		// 请求头值为空（header 不存在或值为空白）直接拒绝，不进入 == 匹配逻辑
-		if strings.TrimSpace(actualValue) == "" {
-			logger.Error("鉴权请求头缺失或为空",
+		// 解析 HTTP Basic 认证（Go 标准库自动处理 Authorization: Basic <base64>）
+		actualUser, actualPass, ok := r.BasicAuth()
+		if !ok {
+			logger.Error("未携带合法的 HTTP Basic 认证头",
 				"remote_addr", r.RemoteAddr,
 				"method", r.Method,
 				"path", r.URL.Path,
-				"header", headerName,
 			)
 			rejectUnauthorized(w)
 			return
 		}
 
-		// 精确、大小写敏感匹配（actualValue 和 expectedValue 均非空）
-		if actualValue == expectedValue {
+		// BasicAuth 返回 ok=true 但 user 或 pass 为空的边界（如 base64(":pass") 或 base64("user:")）
+		// PRD 3.8：值为空字符串也表示未携带认证头 → 401
+		if strings.TrimSpace(actualUser) == "" || strings.TrimSpace(actualPass) == "" {
+			logger.Error("HTTP Basic 认证头中的用户名或密码为空",
+				"remote_addr", r.RemoteAddr,
+				"method", r.Method,
+				"path", r.URL.Path,
+			)
+			rejectUnauthorized(w)
+			return
+		}
+
+		// 精确、大小写敏感匹配（PRD 3.8 业务规则：账号和密码进行精确、大小写敏感匹配）
+		if actualUser == username && actualPass == password {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// 鉴权失败
-		logger.Error("鉴权失败",
+		logger.Error("HTTP Basic 鉴权失败",
 			"remote_addr", r.RemoteAddr,
 			"method", r.Method,
 			"path", r.URL.Path,
-			"header", headerName,
 		)
 		rejectUnauthorized(w)
 	})
 }
 
-// rejectUnauthorized 返回401未授权响应
+// rejectUnauthorized 返回 401 Unauthorized 响应
+// 必须在 WriteHeader 之前设置 WWW-Authenticate 响应头（PRD 3.8 强制要求）
 func rejectUnauthorized(w http.ResponseWriter) {
+	// WWW-Authenticate 必须在 WriteHeader 之前写入，否则不会被发送
+	w.Header().Set("WWW-Authenticate", authRealm)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	json.NewEncoder(w).Encode(model.ErrorResponse{

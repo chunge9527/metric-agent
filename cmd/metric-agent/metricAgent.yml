@@ -110,10 +110,10 @@ victoriaMetrics:
 
 # HTTP 接口鉴权配置
 auth:
-  # 鉴权请求头名称，必填
-  key: "Authorization"
-  # 鉴权密钥，必填
-  value: "bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ="
+  # HTTP Basic 认证用户名，必填
+  username: "user_agent"
+  # HTTP Basic 认证密码，必填
+  password: "metric-agent-pass-2024"
 
 # 文件上传配置
 upload:

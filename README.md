@@ -71,7 +71,7 @@
 | 7 | **优雅关闭**  | 捕获 SIGTERM/SIGINT，HTTP Shutdown 10s 超时自动 SetKeepAlivesEnabled(false) 阻止新连接；依次停止 Nacos、守护巡检、定时任务、日志        |
 | 8 | **双模式运行** | 指令模式（CLI）和 HTTP 服务模式自动识别，无需特殊参数                                                                 |
 | 9 | **特性开关**  | `feature.enableNacos / enableGuardian / enableSchedule` 独立控制各服务启停                               |
-| 10 | **Prometheus Metrics** | HTTP 模式自动暴露 `/metrics`（需鉴权，scrape 端携带 `auth.key` 配置的请求头），6 个业务指标覆盖组件元数据、Nacos 连接、配置分发、进程守护；exec 模式不暴露 |
+| 10 | **Prometheus Metrics** | HTTP 模式自动暴露 `/metrics`（需 HTTP Basic 认证，凭证见 `auth.username` / `auth.password`），6 个业务指标覆盖组件元数据、Nacos 连接、配置分发、进程守护；exec 模式不暴露 |
 
 ## 技术栈
 
@@ -135,7 +135,7 @@ cd metric-agent
 
 ### 4. 主配置
 
-编辑 `metricAgent.yml`（修改 agent.id、nacos.address、nacos.group、auth.key / auth.value 等）：
+编辑 `metricAgent.yml`（修改 agent.id、nacos.address、nacos.group、auth.username / auth.password 等）：
 
 ```yaml
 # MetricAgent 基础配置文件
@@ -234,13 +234,13 @@ upload:
   #   - C:\windows
 
 # HTTP 接口鉴权配置（PRD 3.8）
+# 采用标准 HTTP Basic 认证，所有非白名单接口（除 /health /api/v1/exec /api/v1/guardian）
+# 均需携带 Authorization: Basic base64(username:password) 请求头
 auth:
-  # 鉴权请求头名称（必填），如 Authorization / X-Auth-Token
-  # 客户端请求时需携带此名称的请求头
-  key: "Authorization"
-  # 鉴权凭证值（必填），与请求头 auth.key 对应的值精确、大小写敏感匹配
-  # 生产环境禁止硬编码，优先环境变量注入
-  value: ""
+  # HTTP Basic 认证用户名（必填）
+  username: "user_agent"
+  # HTTP Basic 认证密码（必填）
+  password: "metric-agent-pass-2024"
 
 # 日志配置
 log:
@@ -551,12 +551,13 @@ Agent 作为 HTTP 服务运行，提供 API 接口：
 
 ## API 接口
 
-所有接口（白名单除外：`/health`、`/api/v1/exec`、`/api/v1/guardian`）需在请求头携带鉴权凭证：
+所有接口（白名单除外：`/health`、`/api/v1/exec`、`/api/v1/guardian`）采用 **HTTP Basic 认证**：
 
-* 请求头名称由 `metricAgent.yml` 的 `auth.key` 配置（如 `Authorization`）
-* 请求头值为 `metricAgent.yml` 的 `auth.value`
+* 请求头：`Authorization: Basic <base64(username:password)>`
+* 用户名密码来自 `metricAgent.yml` 的 `auth.username` / `auth.password`
+* 账号密码精确、大小写敏感匹配
 
-> `/metrics` **需鉴权**，Prometheus scrape 需携带相同请求头。
+> `/metrics` **需鉴权**，Prometheus scrape 配置使用标准 `basic_auth` 字段。
 
 ### 1. 健康检查
 
@@ -625,7 +626,8 @@ Content-Type: application/octet-stream
 ```
 GET  /forward?target=http://victoriametrics:8428/api/v1/query?query=up
 POST /forward?target=http://promxy:9092/api/v1/query
-Authorization: <auth.value>
+# HTTP Basic 认证头（示例 user:pass = user_agent:metric-agent-pass-2024）
+Authorization: Basic dXNlcl9hZ2VudDptZXRyaWMtYWdlbnQtcGFzcy0yMDI0
 ```
 
 
@@ -652,7 +654,8 @@ Authorization: <auth.value>
 ```
 POST /api/v1/upload
 Content-Type: multipart/form-data
-Authorization: <auth.value>
+# HTTP Basic 认证头
+Authorization: Basic dXNlcl9hZ2VudDptZXRyaWMtYWdlbnQtcGFzcy0yMDI0
 ```
 
 
@@ -738,15 +741,18 @@ GET /metrics
 
 | 项目 | 说明 |
 | -- | --- |
-| 鉴权 | ✅ 需要（Prometheus scrape 需携带 `auth.key` 配置的请求头，值为 `auth.value`） |
+| 鉴权 | ✅ 需要（HTTP Basic 认证，凭证见 `auth.username` / `auth.password`；Prometheus scrape 使用 `basic_auth` 字段） |
 | 启用条件 | **仅 HTTP 服务模式**；指令执行模式（`--exec`）完全跳过指标初始化 |
 | Content-Type | `text/plain; version=0.0.4` |
 | 默认地址 | `http://127.0.0.1:9092/metrics` |
 
 cURL 示例：
 ```bash
-# 手动查看（需鉴权）
-curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" http://127.0.0.1:9092/metrics
+# 手动查看（需 HTTP Basic 认证）
+curl -u user_agent:metric-agent-pass-2024 http://127.0.0.1:9092/metrics
+
+# 或显式指定 Authorization 头
+curl -H "Authorization: Basic dXNlcl9hZ2VudDptZXRyaWMtYWdlbnQtcGFzcy0yMDI0" http://127.0.0.1:9092/metrics
 ```
 
 #### 指标概览
@@ -845,8 +851,8 @@ chmod +x /opt/metric-agent/metric-agent
 # 4. 重启服务
 sudo systemctl start metric-agent
 
-# 5. 验证
-curl -H "Authorization: bWV0cmljLWFnZW50LWF1dGgta2V5LTIwMjQ=" http://127.0.0.1:9092/health
+# 5. 验证（/health 在鉴权白名单，无需携带凭证）
+curl http://127.0.0.1:9092/health
 ```
 
 
