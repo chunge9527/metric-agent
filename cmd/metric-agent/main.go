@@ -53,6 +53,8 @@ func main() {
 		versionFlag bool
 		execFlag    string
 		umFlag      string
+		enFlag      string
+		deFlag      string
 		execPort    int
 		execTimeout int
 		configFlag  string
@@ -71,6 +73,8 @@ func main() {
 	flag.StringVar(&umFlag, "um", "false", "指令执行模式：是否对 --exec 参数值进行解密（t/true 启用，忽略大小写）")
 	flag.IntVar(&execPort, "port", 9092, "指令执行模式：目标HTTP服务端口（发送请求到 127.0.0.1:port）")
 	flag.IntVar(&execTimeout, "timeout", 0, "指令执行模式：执行超时秒数（默认使用服务端 DefaultExecTimeout=60）")
+	flag.StringVar(&enFlag, "en", "", "凯撒工具模式：对参数值执行凯撒密码加密，输出密文到标准输出")
+	flag.StringVar(&deFlag, "de", "", "凯撒工具模式：对参数值执行凯撒密码解密，输出明文到标准输出")
 	flag.StringVar(&configFlag, "config", myconstant.DefaultConfigPath, "HTTP服务模式：配置文件路径（相对路径基于可执行文件目录）")
 	flag.StringVar(&bindAddr, "bind-addr", myconstant.DefaultBindAddr, "HTTP服务模式：监听地址")
 	flag.StringVar(&logsFlag, "logs", "", "HTTP服务模式：日志文件路径（相对路径基于可执行文件目录，优先级高于YAML中log.logFile）")
@@ -87,6 +91,13 @@ func main() {
 	if versionFlag {
 		fmt.Println(myconstant.AppVersion)
 		os.Exit(0)
+	}
+
+	// ========== 凯撒工具模式（--en/--de，PRD 2.2）==========
+	// 纯本地工具：仅执行凯撒加/解密后输出退出，不加载配置、不初始化AES、不发送HTTP请求
+	enSet, deSet := detectExplicitCipherFlags(os.Args)
+	if enSet || deSet {
+		os.Exit(runCipherToolMode(enSet, deSet, enFlag, deFlag))
 	}
 
 	// ========== 模式判定 ==========
@@ -153,6 +164,70 @@ func detectExplicitExecFlags(args []string) []string {
 		}
 	}
 	return found
+}
+
+// cipherFlagSet 凯撒工具参数集合（用于 detectExplicitCipherFlags）
+// Go flag 同时接受单横线（-en）和双横线（--en）形式，两种都需识别
+var cipherFlagSet = map[string]string{
+	"-en":  "--en",
+	"--en": "--en",
+	"-de":  "--de",
+	"--de": "--de",
+}
+
+// detectExplicitCipherFlags 检测命令行中是否显式传入了 --en/--de 参数
+// 显式传入空值（--en= 或 --en ""）同样视为已出现，交由 runCipherToolMode 按空串处理
+// author: 王春
+// date: 2026-10-14
+func detectExplicitCipherFlags(args []string) (enSet bool, deSet bool) {
+	for _, arg := range args {
+		argName := arg
+		if idx := strings.Index(arg, "="); idx > 0 {
+			argName = arg[:idx]
+		}
+		switch cipherFlagSet[argName] {
+		case "--en":
+			enSet = true
+		case "--de":
+			deSet = true
+		}
+	}
+	return enSet, deSet
+}
+
+// runCipherToolMode 凯撒工具模式（PRD 2.2 --en/--de）
+// --en：对参数值做凯撒加密，输出密文；--de：对参数值做凯撒解密，输出明文
+// 互斥规则：
+//   - --en 与 --de 互斥，同时传入直接报错
+//   - 与其他所有显式参数（--exec/--um/--port/--timeout/--config/--bind-addr/--logs）互斥
+//   - --help/--version 优先级更高，已在 main() 前置分支处理，此处无需校验
+//
+// 显式传入空值按空串处理（输出空行，退出码 0）
+// author: 王春
+// date: 2026-10-14
+func runCipherToolMode(enSet, deSet bool, enValue, deValue string) int {
+	// 校验1：--en 与 --de 不可同时传入
+	if enSet && deSet {
+		fmt.Fprintln(os.Stderr, "错误：--en 与 --de 参数互斥，不可同时传入")
+		printUsage()
+		return 1
+	}
+	// 校验2：与其他任何显式参数互斥（--config/--bind-addr/--logs/--exec/--um/--port/--timeout）
+	var conflicts []string
+	conflicts = append(conflicts, detectExplicitHTTPFlags(os.Args)...)
+	conflicts = append(conflicts, detectExplicitExecFlags(os.Args)...)
+	if len(conflicts) > 0 {
+		fmt.Fprintf(os.Stderr, "错误：--en/--de 与参数(%s)互斥，仅可单独使用\n", strings.Join(conflicts, ", "))
+		printUsage()
+		return 1
+	}
+	// 执行加/解密并输出结果
+	if enSet {
+		fmt.Println(caesarEncrypt(enValue))
+	} else {
+		fmt.Println(caesarDecrypt(deValue))
+	}
+	return 0
 }
 
 // runExecMode 指令执行模式
@@ -318,6 +393,28 @@ func caesarDecrypt(input string) string {
 	return string(runes)
 }
 
+// caesarEncrypt 凯撒密码加密（PRD 2.2）
+// 规则：对26个英文字母向后偏移1位（与 caesarDecrypt 互逆）
+//   - 大写 A-Z：每个字母 +1，Z → A
+//   - 小写 a-z：每个字母 +1，z → a
+//   - 大小写独立处理，不跨大小写转换
+//   - 非 A-Z 和 a-z 的所有字符原样保留
+//
+// author: 王春
+// date: 2026-10-14
+func caesarEncrypt(input string) string {
+	runes := []rune(input)
+	for i, r := range runes {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			runes[i] = 'A' + (r-'A'+1)%26
+		case r >= 'a' && r <= 'z':
+			runes[i] = 'a' + (r-'a'+1)%26
+		}
+	}
+	return string(runes)
+}
+
 // runHTTPMode HTTP服务模式
 func runHTTPMode(configPath string, bindAddr string, logPath string) int {
 	// ========== 第一步：先加载 yaml 配置 ==========
@@ -447,6 +544,9 @@ func printUsage() {
 	fmt.Println("  --um string          是否对 --exec 参数值进行凯撒密码解密（值为 t/true 启用，忽略大小写；推荐 --um=true 或 --um=t）")
 	fmt.Println("  --port int           目标HTTP服务端口 (default 9092)")
 	fmt.Println("  --timeout int        执行超时秒数 (default 60，上限 1800)")
+	fmt.Println("  --en string          凯撒工具：对参数值加密（字母向后+1：A→B，Z→A回卷），输出密文后退出")
+	fmt.Println("  --de string          凯撒工具：对参数值解密（字母向前-1：B→A，A→Z回卷），输出明文后退出")
+	fmt.Println("                       --en/--de 仅可单独使用，与除 --help/--version 外所有参数互斥")
 	fmt.Println("  --                   分隔符，其后内容作为脚本参数传递（含空格参数不丢失语义）")
 	fmt.Println()
 	fmt.Println("HTTP服务模式参数（常驻后台）:")
@@ -466,6 +566,7 @@ func printUsage() {
 	fmt.Println("  2. 指令模式向本地 MetricAgent HTTP 服务发 AES 加密请求，请求体和返回值均使用 AES 加解密传输")
 	fmt.Println("  3. --um=true 时，先对 --exec 参数值做凯撒密码解密（字母向前偏移1位：B→A，A→Z），再 AES 加密发送")
 	fmt.Println("  4. --help 与其他参数同时出现时仅输出帮助并退出")
+	fmt.Println("  5. --en/--de 为凯撒密码加解密工具，与除 --help/--version 外所有参数互斥，仅执行加/解密输出后退出")
 	fmt.Println()
 	fmt.Println("示例:")
 	fmt.Println("  # 先启动 MetricAgent HTTP 服务")
@@ -476,6 +577,10 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("  # 指令模式 - 使用 --um 解密后再执行")
 	fmt.Println("  metric-agent --um true --exec 'abcd'   # 凯撒解密后为 'zabc'（每个字母向前-1）")
+	fmt.Println()
+	fmt.Println("  # 凯撒工具模式 - 加密/解密（纯本地执行，无需启动 HTTP 服务）")
+	fmt.Println("  metric-agent --en 'zabc'   # 输出 abcd（每个字母向后+1）")
+	fmt.Println("  metric-agent --de 'abcd'   # 输出 zabc（每个字母向前-1）")
 	fmt.Println()
 	fmt.Println("  # 指令模式 - 指定端口、超时并传参（含空格参数正确传递）")
 	fmt.Println("  metric-agent --exec 'echo' --port 9092 --timeout 30 -- arg1 '/some/path with spaces' arg2")
